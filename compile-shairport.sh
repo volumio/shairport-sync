@@ -34,8 +34,7 @@ sudo apt-get install -y \
 
 
 # Clone Shairport Sync
-#git clone https://github.com/mikebrady/shairport-sync.git
-cd shairport-sync
+
 
 # Configure and prepare for build
 autoreconf -fi
@@ -49,7 +48,11 @@ autoreconf -fi
     --with-metadata \
     --with-systemd \
     --with-airplay-2 \
-    --with-dbus-interface
+    --with-dbus-interface \
+    --with-dbus-test-client \ 
+    --with-mpris-interface \ 
+    --with-mpris-test-client \
+    --with-libdaemon
 
 # Build
 make
