@@ -49,22 +49,28 @@ autoreconf -fi
     --with-systemd \
     --with-airplay-2 \
     --with-dbus-interface \
-    --with-dbus-test-client \ 
-    --with-mpris-interface \ 
+    --with-dbus-test-client \
+    --with-mpris-interface \
     --with-mpris-test-client \
     --with-libdaemon
 
 # Build
 make
 
+
+# Automating checkinstall does not work, proceed with manual entries
+sudo checkinstall
+# In this case, press 4 and enter 1 as release version
+
 # Create debian package with checkinstall
-sudo checkinstall --pkgname=shairport-sync \
-    --pkgversion="$(date +%Y%m%d)" \
-    --backup=no \
-    --deldoc=yes \
-    --fstrans=no \
-    --default \
-    --pakdir="../"
+#sudo checkinstall --pkgname=shairport-sync \
+#    --pkgversion="$(date +%Y%m%d)" \
+#    --pkgrelease="1" \
+#    --backup=no \
+#    --deldoc=yes \
+#    --fstrans=no \
+#    --default \
+#    --pakdir="../"
 
 # Clean up build directory
 cd ..
