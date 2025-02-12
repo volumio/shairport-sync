@@ -52,7 +52,8 @@ autoreconf -fi
     --with-dbus-test-client \
     --with-mpris-interface \
     --with-mpris-test-client \
-    --with-libdaemon
+    --with-libdaemon \
+    --sysconfdir=/etc
 
 # Build
 make
