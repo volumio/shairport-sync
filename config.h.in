@@ -1,0 +1,437 @@
+/* config.h.in.  Generated from configure.ac by autoheader.  */
+
+/* Build for AirPlay 2 */
+#undef CONFIG_AIRPLAY_2
+
+/* Needed by the compiler. */
+#undef CONFIG_ALSA
+
+/* Include an AO-compatible audio backend. */
+#undef CONFIG_AO
+
+/* Include support for using the Apple ALAC Decoder */
+#undef CONFIG_APPLE_ALAC
+
+/* Include Avahi-based mDNS support. */
+#undef CONFIG_AVAHI
+
+/* Include audio DSP convolution support. */
+#undef CONFIG_CONVOLUTION
+
+/* Needed by the compiler. */
+#undef CONFIG_DACP_CLIENT
+
+/* Support the native Shairport Sync D-Bus interface */
+#undef CONFIG_DBUS_INTERFACE
+
+/* Include dns_sd mDNS support. */
+#undef CONFIG_DNS_SD
+
+/* Include a fake audio backend. */
+#undef CONFIG_DUMMY
+
+/* Use 'avahi-publish-service' or 'mDNSPublish' to advertise. */
+#undef CONFIG_EXTERNAL_MDNS
+
+/* Include a Jack Audio Connection Kit (jack) audio backend */
+#undef CONFIG_JACK
+
+/* Include libdaemon for daemonising in non-systemd systems */
+#undef CONFIG_LIBDAEMON
+
+/* Use the mbed TLS libraries for encryption and encoding and decoding */
+#undef CONFIG_MBEDTLS
+
+/* Needed by the compiler. */
+#undef CONFIG_METADATA
+
+/* Needed by the compiler. */
+#undef CONFIG_METADATA_HUB
+
+/* Support the MPRIS standard */
+#undef CONFIG_MPRIS_INTERFACE
+
+/* Include a client for MQTT, the Message Queuing Telemetry Transport protocol
+   */
+#undef CONFIG_MQTT
+
+/* Use the OpenSSL libraries for encryption and encoding and decoding */
+#undef CONFIG_OPENSSL
+
+/* Include PulseAudio support. */
+#undef CONFIG_PA
+
+/* Include an audio backend to output to a unix pipe. */
+#undef CONFIG_PIPE
+
+/* Use the PolarSSL libraries for encryption and encoding and decoding */
+#undef CONFIG_POLARSSL
+
+/* Include Pipewire support. */
+#undef CONFIG_PW
+
+/* Include a sndio-compatible audio backend. */
+#undef CONFIG_SNDIO
+
+/* Include the SoundIO (libsoundio) backend. */
+#undef CONFIG_SOUNDIO
+
+/* Include support for using the SoX Resampler library for interpolation */
+#undef CONFIG_SOXR
+
+/* Include an audio backend to output to standard output (stdout). */
+#undef CONFIG_STDOUT
+
+/* Include TinySVCmDNS-based mDNS support */
+#undef CONFIG_TINYSVCMDNS
+
+/* Use the version string produced by running 'git describe --dirty'. */
+#undef CONFIG_USE_GIT_VERSION_STRING
+
+/* Define to one of `_getb67', `GETB67', `getb67' for Cray-2 and Cray-YMP
+   systems. This function is required for `alloca.c' support on those systems.
+   */
+#undef CRAY_STACKSEG_END
+
+/* Define to 1 if using `alloca.c'. */
+#undef C_ALLOCA
+
+/* Hook up special proc to libdaemon to point to this directory */
+#undef DEFINED_CUSTOM_PID_DIR
+
+/* Define to 1 if you have `alloca', as a function or macro. */
+#undef HAVE_ALLOCA
+
+/* Define to 1 if you have <alloca.h> and it should be used (not on Ultrix).
+   */
+#undef HAVE_ALLOCA_H
+
+/* Define to 1 if you have the <arpa/inet.h> header file. */
+#undef HAVE_ARPA_INET_H
+
+/* Define to 1 if you have the `atexit' function. */
+#undef HAVE_ATEXIT
+
+/* Define to 1 if you have the `clock_gettime' function. */
+#undef HAVE_CLOCK_GETTIME
+
+/* Define to 1 if you have the <fcntl.h> header file. */
+#undef HAVE_FCNTL_H
+
+/* Define to 1 if you have the `fork' function. */
+#undef HAVE_FORK
+
+/* Define to 1 if you have the `gethostname' function. */
+#undef HAVE_GETHOSTNAME
+
+/* Define to 1 if you have the <getopt_long.h> header file. */
+#undef HAVE_GETOPT_LONG_H
+
+/* Define to 1 if you have the `inet_ntoa' function. */
+#undef HAVE_INET_NTOA
+
+/* Define to 1 if you have the <inttypes.h> header file. */
+#undef HAVE_INTTYPES_H
+
+/* Define to 1 if you have the `alac' library (-lalac). */
+#undef HAVE_LIBALAC
+
+/* Define to 1 if you have the `ao' library (-lao). */
+#undef HAVE_LIBAO
+
+/* Define to 1 if you have the `asound' library (-lasound). */
+#undef HAVE_LIBASOUND
+
+/* Define to 1 if you have the `avahi-client' library (-lavahi-client). */
+#undef HAVE_LIBAVAHI_CLIENT
+
+/* Define to 1 if you have the `avahi-common' library (-lavahi-common). */
+#undef HAVE_LIBAVAHI_COMMON
+
+/* Define to 1 if you have the `avcodec' library (-lavcodec). */
+#undef HAVE_LIBAVCODEC
+
+/* Define to 1 if you have the `avformat' library (-lavformat). */
+#undef HAVE_LIBAVFORMAT
+
+/* Define to 1 if you have the `avutil' library (-lavutil). */
+#undef HAVE_LIBAVUTIL
+
+/* Define to 1 if you have the `c' library (-lc). */
+#undef HAVE_LIBC
+
+/* Define to 1 if you have the `config' library (-lconfig). */
+#undef HAVE_LIBCONFIG
+
+/* Define to 1 if you have the `crypto' library (-lcrypto). */
+#undef HAVE_LIBCRYPTO
+
+/* Define to 1 if you have the `daemon' library (-ldaemon). */
+#undef HAVE_LIBDAEMON
+
+/* Define to 1 if you have the `gcrypt' library (-lgcrypt). */
+#undef HAVE_LIBGCRYPT
+
+/* Define to 1 if you have the `jack' library (-ljack). */
+#undef HAVE_LIBJACK
+
+/* Define to 1 if you have the `m' library (-lm). */
+#undef HAVE_LIBM
+
+/* Define to 1 if you have the `mbedcrypto' library (-lmbedcrypto). */
+#undef HAVE_LIBMBEDCRYPTO
+
+/* Define to 1 if you have the `mbedtls' library (-lmbedtls). */
+#undef HAVE_LIBMBEDTLS
+
+/* Define to 1 if you have the `mbedx509' library (-lmbedx509). */
+#undef HAVE_LIBMBEDX509
+
+/* Define to 1 if you have the `mosquitto' library (-lmosquitto). */
+#undef HAVE_LIBMOSQUITTO
+
+/* Define to 1 if you have the `pipewire' library (-lpipewire). */
+#undef HAVE_LIBPIPEWIRE
+
+/* libplist >= 2.3.0 */
+#undef HAVE_LIBPLIST_GE_2_3_0
+
+/* Define to 1 if you have the `polarssl' library (-lpolarssl). */
+#undef HAVE_LIBPOLARSSL
+
+/* Define to 1 if you have the `popt' library (-lpopt). */
+#undef HAVE_LIBPOPT
+
+/* Define to 1 if you have the `pthread' library (-lpthread). */
+#undef HAVE_LIBPTHREAD
+
+/* Define to 1 if you have the `pulse' library (-lpulse). */
+#undef HAVE_LIBPULSE
+
+/* Define to 1 if you have the `pulse-simple' library (-lpulse-simple). */
+#undef HAVE_LIBPULSE_SIMPLE
+
+/* Define to 1 if you have the `rt' library (-lrt). */
+#undef HAVE_LIBRT
+
+/* Define to 1 if you have the `sndfile' library (-lsndfile). */
+#undef HAVE_LIBSNDFILE
+
+/* Define to 1 if you have the `sndio' library (-lsndio). */
+#undef HAVE_LIBSNDIO
+
+/* Define to 1 if you have the `soundio' library (-lsoundio). */
+#undef HAVE_LIBSOUNDIO
+
+/* Define to 1 if you have the `soxr' library (-lsoxr). */
+#undef HAVE_LIBSOXR
+
+/* Define to 1 if you have the `ssl' library (-lssl). */
+#undef HAVE_LIBSSL
+
+/* Define to 1 if you have the `swresample' library (-lswresample). */
+#undef HAVE_LIBSWRESAMPLE
+
+/* Define to 1 if you have the `uuid' library (-luuid). */
+#undef HAVE_LIBUUID
+
+/* Define to 1 if you have the <limits.h> header file. */
+#undef HAVE_LIMITS_H
+
+/* Define to 1 if you have the <mach/mach.h> header file. */
+#undef HAVE_MACH_MACH_H
+
+/* Define to 1 if you have the `memchr' function. */
+#undef HAVE_MEMCHR
+
+/* Define to 1 if you have the `memmove' function. */
+#undef HAVE_MEMMOVE
+
+/* Define to 1 if you have the <memory.h> header file. */
+#undef HAVE_MEMORY_H
+
+/* Define to 1 if you have the `memset' function. */
+#undef HAVE_MEMSET
+
+/* Define to 1 if you have the `mkfifo' function. */
+#undef HAVE_MKFIFO
+
+/* Define to 1 if you have the <netdb.h> header file. */
+#undef HAVE_NETDB_H
+
+/* Define to 1 if you have the <netinet/in.h> header file. */
+#undef HAVE_NETINET_IN_H
+
+/* Define to 1 if you have the `pow' function. */
+#undef HAVE_POW
+
+/* Define to 1 if you have the `select' function. */
+#undef HAVE_SELECT
+
+/* Define to 1 if you have the `socket' function. */
+#undef HAVE_SOCKET
+
+/* Define to 1 if you have the <stdint.h> header file. */
+#undef HAVE_STDINT_H
+
+/* Define to 1 if you have the <stdlib.h> header file. */
+#undef HAVE_STDLIB_H
+
+/* Define to 1 if you have the `stpcpy' function. */
+#undef HAVE_STPCPY
+
+/* Define to 1 if you have the `strcasecmp' function. */
+#undef HAVE_STRCASECMP
+
+/* Define to 1 if you have the `strchr' function. */
+#undef HAVE_STRCHR
+
+/* Define to 1 if you have the `strdup' function. */
+#undef HAVE_STRDUP
+
+/* Define to 1 if you have the `strerror' function. */
+#undef HAVE_STRERROR
+
+/* Define to 1 if you have the <strings.h> header file. */
+#undef HAVE_STRINGS_H
+
+/* Define to 1 if you have the <string.h> header file. */
+#undef HAVE_STRING_H
+
+/* Define to 1 if you have the `strstr' function. */
+#undef HAVE_STRSTR
+
+/* Define to 1 if you have the `strtol' function. */
+#undef HAVE_STRTOL
+
+/* Define to 1 if you have the `strtoul' function. */
+#undef HAVE_STRTOUL
+
+/* Define to 1 if you have the <syslog.h> header file. */
+#undef HAVE_SYSLOG_H
+
+/* Define to 1 if you have the <sys/ioctl.h> header file. */
+#undef HAVE_SYS_IOCTL_H
+
+/* Define to 1 if you have the <sys/socket.h> header file. */
+#undef HAVE_SYS_SOCKET_H
+
+/* Define to 1 if you have the <sys/stat.h> header file. */
+#undef HAVE_SYS_STAT_H
+
+/* Define to 1 if you have the <sys/time.h> header file. */
+#undef HAVE_SYS_TIME_H
+
+/* Define to 1 if you have the <sys/types.h> header file. */
+#undef HAVE_SYS_TYPES_H
+
+/* Define to 1 if you have the <unistd.h> header file. */
+#undef HAVE_UNISTD_H
+
+/* Define to 1 if you have the `vfork' function. */
+#undef HAVE_VFORK
+
+/* Define to 1 if you have the <vfork.h> header file. */
+#undef HAVE_VFORK_H
+
+/* Define to 1 if `fork' works. */
+#undef HAVE_WORKING_FORK
+
+/* Define to 1 if `vfork' works. */
+#undef HAVE_WORKING_VFORK
+
+/* Name of package */
+#undef PACKAGE
+
+/* Define to the address where bug reports for this package should be sent. */
+#undef PACKAGE_BUGREPORT
+
+/* Define to the full name of this package. */
+#undef PACKAGE_NAME
+
+/* Define to the full name and version of this package. */
+#undef PACKAGE_STRING
+
+/* Define to the one symbol short name of this package. */
+#undef PACKAGE_TARNAME
+
+/* Define to the home page for this package. */
+#undef PACKAGE_URL
+
+/* Define to the version of this package. */
+#undef PACKAGE_VERSION
+
+/* If using the C implementation of alloca, define if you know the
+   direction of stack growth for your system; otherwise it will be
+   automatically deduced at runtime.
+	STACK_DIRECTION > 0 => grows toward higher addresses
+	STACK_DIRECTION < 0 => grows toward lower addresses
+	STACK_DIRECTION = 0 => direction of growth unknown */
+#undef STACK_DIRECTION
+
+/* Define to 1 if you have the ANSI C header files. */
+#undef STDC_HEADERS
+
+/* Version number of package */
+#undef VERSION
+
+/* Define for Solaris 2.5.1 so the uint32_t typedef from <sys/synch.h>,
+   <pthread.h>, or <semaphore.h> is not used. If the typedef were allowed, the
+   #define below would cause a syntax error. */
+#undef _UINT32_T
+
+/* Define for Solaris 2.5.1 so the uint64_t typedef from <sys/synch.h>,
+   <pthread.h>, or <semaphore.h> is not used. If the typedef were allowed, the
+   #define below would cause a syntax error. */
+#undef _UINT64_T
+
+/* Define for Solaris 2.5.1 so the uint8_t typedef from <sys/synch.h>,
+   <pthread.h>, or <semaphore.h> is not used. If the typedef were allowed, the
+   #define below would cause a syntax error. */
+#undef _UINT8_T
+
+/* Define to `__inline__' or `__inline' if that's what the C compiler
+   calls it, or to nothing if 'inline' is not supported under any name.  */
+#ifndef __cplusplus
+#undef inline
+#endif
+
+/* Define to the type of a signed integer type of width exactly 16 bits if
+   such a type exists and the standard includes do not define it. */
+#undef int16_t
+
+/* Define to the type of a signed integer type of width exactly 32 bits if
+   such a type exists and the standard includes do not define it. */
+#undef int32_t
+
+/* Define to the type of a signed integer type of width exactly 64 bits if
+   such a type exists and the standard includes do not define it. */
+#undef int64_t
+
+/* Define to `int' if <sys/types.h> does not define. */
+#undef pid_t
+
+/* Define to `unsigned int' if <sys/types.h> does not define. */
+#undef size_t
+
+/* Define to `int' if <sys/types.h> does not define. */
+#undef ssize_t
+
+/* Define to the type of an unsigned integer type of width exactly 16 bits if
+   such a type exists and the standard includes do not define it. */
+#undef uint16_t
+
+/* Define to the type of an unsigned integer type of width exactly 32 bits if
+   such a type exists and the standard includes do not define it. */
+#undef uint32_t
+
+/* Define to the type of an unsigned integer type of width exactly 64 bits if
+   such a type exists and the standard includes do not define it. */
+#undef uint64_t
+
+/* Define to the type of an unsigned integer type of width exactly 8 bits if
+   such a type exists and the standard includes do not define it. */
+#undef uint8_t
+
+/* Define as `fork' if `vfork' does not work. */
+#undef vfork

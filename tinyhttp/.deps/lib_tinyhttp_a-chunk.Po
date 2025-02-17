@@ -1,0 +1,4 @@
+tinyhttp/lib_tinyhttp_a-chunk.o: tinyhttp/chunk.c \
+ /usr/include/stdc-predef.h
+
+/usr/include/stdc-predef.h:

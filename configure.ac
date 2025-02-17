@@ -2,7 +2,7 @@
 # Process this file with autoconf to produce a configure script.
 
 AC_PREREQ([2.50])
-AC_INIT([shairport-sync], [4.1-rc2], [4265913+mikebrady@users.noreply.github.com])
+AC_INIT([shairport-sync], [4.3.7], [4265913+mikebrady@users.noreply.github.com])
 AM_INIT_AUTOMAKE([subdir-objects])
 AC_CONFIG_SRCDIR([shairport.c])
 AC_CONFIG_HEADERS([config.h])
@@ -33,6 +33,7 @@ esac
 # Checks for programs.
 AC_PROG_CC
 AC_PROG_CXX
+AC_CHECK_TOOL(AR, ar, :)
 AC_PROG_INSTALL
 
 PKG_PROG_PKG_CONFIG([0.9.0])
@@ -67,8 +68,7 @@ AC_CHECK_LIB([m],[exp], , AC_MSG_ERROR(maths library needed))
 if  test "x${with_pkg_config}" = xyes ; then
   PKG_CHECK_MODULES(
       [popt], [popt],
-      [CFLAGS="${popt_CFLAGS} ${CFLAGS}"
-      LIBS="${popt_LIBS} ${LIBS}"], AC_MSG_ERROR(libpopt needed))
+      [CFLAGS="${popt_CFLAGS} ${CFLAGS}" LIBS="${popt_LIBS} ${LIBS}"], AC_MSG_ERROR(libpopt needed))
 else
   AC_CHECK_LIB([popt],[poptGetContext], , AC_MSG_ERROR(libpopt needed))
 fi
@@ -114,11 +114,16 @@ if  test "x$with_external_mdns" = xyes ; then
 fi
 AM_CONDITIONAL([USE_EXTERNAL_MDNS], [test "x$with_external_mdns" = "xyes" ])
 
+# Check if we want to create user/group (default to yes):
+
+AC_ARG_WITH([create-user-group],[AS_HELP_STRING([--with-create-user-group],[create user/group during a make install])], ,[with_with_create_user_group=yes])
+AM_CONDITIONAL([INSTALL_CREATE_USER_GROUP], [test "x$with_with_create_user_group" = "xyes"])
+
 # Add the libconfig package
 if  test "x${with_pkg_config}" = xyes ; then
   PKG_CHECK_MODULES(
       [libconfig], [libconfig],
-      [LIBS="${libconfig_LIBS} ${LIBS}"], AC_MSG_ERROR([libconfig library needed]))
+      [CFLAGS="${libconfig_CFLAGS} ${CFLAGS}" LIBS="${libconfig_LIBS} ${LIBS}"], AC_MSG_ERROR([libconfig library needed]))
 else
   AC_CHECK_LIB([config],[config_init], , AC_MSG_ERROR([libconfig library needed]))
 fi
@@ -175,7 +180,7 @@ if test "x${with_ssl}" = xopenssl ; then
 	if  test "x${with_pkg_config}" = xyes ; then
 	  PKG_CHECK_MODULES(
 	      [SSL], [libssl,libcrypto],
-	      [LIBS="${SSL_LIBS} ${LIBS}"])
+	      [CFLAGS="${SSL_CFLAGS} ${CFLAGS}" LIBS="${SSL_LIBS} ${LIBS}"])
 	else
 	  AC_CHECK_LIB([crypto], [main], , AC_MSG_ERROR(libcrypto selected but the library cannot be found!))
 	  AC_CHECK_LIB([ssl], [main], , AC_MSG_ERROR(libssl selected but the library cannot be found!))
@@ -282,15 +287,22 @@ AM_CONDITIONAL([USE_SNDIO], [test "x$with_sndio" = "xyes"])
 AC_ARG_WITH(ao, [AS_HELP_STRING([--with-ao],[choose AO (Audio Output?) API support. N.B. no synchronisation -- so underflow or overflow is inevitable!])])
 if test "x$with_ao" = "xyes" ; then
   AC_DEFINE([CONFIG_AO], 1, [Include an AO-compatible  audio backend.])
-  AC_CHECK_LIB([ao], [ao_initialize], , AC_MSG_ERROR(AO support requires the ao library -- libao-dev suggested))
+  if  test "x${with_pkg_config}" = xyes ; then
+    PKG_CHECK_MODULES(
+        [AO], [ao > 1.0.0],
+        [CFLAGS="${AO_CFLAGS} ${CFLAGS}" LIBS="${AO_LIBS} ${LIBS}"], [AC_MSG_ERROR(AO support requires the ao library -- libao-dev suggested)])
+  else
+    AC_CHECK_LIB([ao], [ao_initialize], , AC_MSG_ERROR(AO support requires the ao library -- libao-dev suggested))
+  fi
 fi
 AM_CONDITIONAL([USE_AO], [test "x$with_ao" = "xyes"])
 
 # Look for Soundio flag
 AC_ARG_WITH(soundio, [AS_HELP_STRING([--with-soundio],[choose soundio API support.])])
 if test "x$with_soundio" = "xyes" ; then
-  AC_DEFINE([CONFIG_SOUNDIO], 1, [Include SoundIO Support.])
-  AC_CHECK_LIB([soundio], [soundio_create], , AC_MSG_ERROR(soundio support requires the soundio library -- libsoundio-dev suggested))
+  AC_DEFINE([CONFIG_SOUNDIO], 1, [Include the SoundIO (libsoundio) backend.])
+  AC_CHECK_LIB([soundio], [soundio_create], , AC_MSG_ERROR(soundio support requires the libsoundio library -- libsoundio-dev suggested (note: the soundio backend is deprecated and will be removed in a future update)))
+  AC_MSG_WARN([The soundio (libsoundio) backend is deprecated and will be removed in a future update.])
 fi
 AM_CONDITIONAL([USE_SOUNDIO], [test "x$with_soundio" = "xyes"])
 
@@ -406,24 +418,74 @@ AM_CONDITIONAL([USE_METADATA], [test "x$with_metadata" = "xyes"])
 AC_ARG_WITH(airplay-2, [AS_HELP_STRING([--with-airplay-2],[Build for AirPlay 2])])
 if test "x$with_airplay_2" = "xyes" ; then
   AC_DEFINE([CONFIG_AIRPLAY_2], 1, [Build for AirPlay 2])
-  PKG_CHECK_MODULES([libplist], [libplist >= 2.0.0],[CFLAGS="${libplist_CFLAGS} ${CFLAGS}" LIBS="${libplist_LIBS} ${LIBS}"],[
-    PKG_CHECK_MODULES([libplist], [libplist-2.0 >= 2.0.0],[CFLAGS="${libplist_CFLAGS} ${CFLAGS}" LIBS="${libplist_LIBS} ${LIBS}"],[
-      AC_MSG_ERROR(AirPlay 2 support requires libplist 2.0.0 or later -- search for pkg libplist-dev on Debian or libplist-2.2.0 or later on FreeBSD!)
-    ])
+  AC_CHECK_PROG(XXD_CHECK,xxd,yes)
+  AS_IF([test x"$XXD_CHECK" != x"yes"], [AC_MSG_ERROR([xxd can not be found. Please install xxd for building for AirPlay 2.])])
+  LIBPLIST_PACKAGE=libplist
+  PKG_CHECK_EXISTS(libplist-2.0, LIBPLIST_PACKAGE=libplist-2.0)
+  PKG_CHECK_MODULES(
+    [libplist], [${LIBPLIST_PACKAGE} >= 2.3.0],
+    [CFLAGS="${libplist_CFLAGS} ${CFLAGS}" LIBS="${libplist_LIBS} ${LIBS}" AC_DEFINE([HAVE_LIBPLIST_GE_2_3_0], 1, [libplist >= 2.3.0])],
+    [PKG_CHECK_MODULES(
+      [libplist], [${LIBPLIST_PACKAGE} >= 2.0.0],
+      [CFLAGS="${libplist_CFLAGS} ${CFLAGS}" LIBS="${libplist_LIBS} ${LIBS}"],
+      [AC_MSG_ERROR(AirPlay 2 support requires libplist 2.0.0 or later -- search for pkg libplist-dev on Debian or libplist-2.2.0 or later on FreeBSD!)]
+    )]
+  )
+  PKG_CHECK_MODULES(
+    [libsodium], [libsodium],
+    [CFLAGS="${libsodium_CFLAGS} ${CFLAGS}" LIBS="${libsodium_LIBS} ${LIBS}"],
+    [AC_MSG_ERROR(AirPlay 2 support requires libsodium -- libsodium-dev suggested)]
+  )
+  PKG_CHECK_MODULES(
+    [libgcrypt], [libgcrypt],
+    [CFLAGS="${libgcrypt_CFLAGS} ${CFLAGS}" LIBS="${libgcrypt_LIBS} ${LIBS}"],
+    [AC_CHECK_LIB(
+      [gcrypt], [gcry_control],
+      [],
+      [AC_MSG_ERROR([Airplay 2 support requires libgcrypt -- libgcrypt-dev suggested])]
+    )
   ])
-  PKG_CHECK_MODULES([libsodium], [libsodium],[CFLAGS="${libsodium_CFLAGS} ${CFLAGS}" LIBS="${libsodium_LIBS} ${LIBS}"],[AC_MSG_ERROR(AirPlay 2 support requires libsodium -- libsodium-dev suggested)])
-  PKG_CHECK_MODULES([libgcrypt], [libgcrypt],[CFLAGS="${libgcrypt_CFLAGS} ${CFLAGS}" LIBS="${libgcrypt_LIBS} ${LIBS}"],[
-    AC_CHECK_LIB([gcrypt], [gcry_control], [], [
-      AC_MSG_ERROR([Airplay 2 support requires libgcrypt -- libgcrypt-dev suggested])
-    ])
-  ])
-  PKG_CHECK_MODULES([libavutil], [libavutil],[CFLAGS="${libavutil_CFLAGS} ${CFLAGS}" LIBS="${libavutil_LIBS} ${LIBS}"],[
-      AC_MSG_ERROR(AirPlay 2 support requires libavutil -- libavutil-dev suggested)])
-  PKG_CHECK_MODULES([libavcodec], [libavcodec],[CFLAGS="${libavcodec_CFLAGS} ${CFLAGS}" LIBS="${libavcodec_LIBS} ${LIBS}"],[
-      AC_MSG_ERROR(AirPlay 2 support requires libavcodec -- libavcodec-dev suggested)])
-  AC_CHECK_LIB([avformat],[avformat_new_stream], [], [AC_MSG_ERROR([AirPlay 2 support requires libavformat -- libavformat-dev suggested])])
-  AC_CHECK_LIB([swresample],[swr_convert], [], [AC_MSG_ERROR([AirPlay 2 support requires libswresample -- libswresample-dev suggested])])
-  AC_CHECK_LIB([uuid],[uuid_generate], [], [AC_MSG_ERROR([AirPlay 2 support requires the uuid library -- uuid-dev suggested])])
+  PKG_CHECK_MODULES(
+    [libavutil], [libavutil],
+    [CFLAGS="${libavutil_CFLAGS} ${CFLAGS}" LIBS="${libavutil_LIBS} ${LIBS}"],
+    [AC_MSG_ERROR(AirPlay 2 support requires libavutil -- libavutil-dev suggested)]
+  )
+  PKG_CHECK_MODULES(
+    [libavcodec], [libavcodec],
+    [CFLAGS="${libavcodec_CFLAGS} ${CFLAGS}" LIBS="${libavcodec_LIBS} ${LIBS}"],
+    [AC_CHECK_LIB(
+      [avcodec], [avcodec_find_decoder],
+      [],
+      [AC_MSG_ERROR(AirPlay 2 support requires libavcodec -- libavcodec-dev suggested)]
+    )]
+  )
+  PKG_CHECK_MODULES(
+    [libavformat], [libavformat],
+    [CFLAGS="${libavformat_CFLAGS} ${CFLAGS}" LIBS="${libavformat_LIBS} ${LIBS}"],
+    [AC_CHECK_LIB(
+      [avformat], [avformat_new_stream],
+      [],
+      [AC_MSG_ERROR([AirPlay 2 support requires libavformat -- libavformat-dev suggested])]
+    )]
+  )
+  PKG_CHECK_MODULES(
+    [libswresample], [libswresample],
+    [CFLAGS="${libswresample_CFLAGS} ${CFLAGS}" LIBS="${libswresample_LIBS} ${LIBS}"],
+    [AC_CHECK_LIB(
+      [swresample], [swr_convert],
+      [],
+      [AC_MSG_ERROR([AirPlay 2 support requires libswresample -- libswresample-dev suggested])]
+    )]
+  )
+  PKG_CHECK_MODULES(
+    [libuuid], [uuid],
+    [CFLAGS="${libuuid_CFLAGS} ${CFLAGS}" LIBS="${libuuid_LIBS} ${LIBS}"],
+    [AC_CHECK_LIB(
+      [uuid], [uuid_generate],
+      [],
+      [AC_MSG_ERROR([AirPlay 2 support requires the uuid library -- uuid-dev suggested])]
+    )]
+  )
 fi
 AM_CONDITIONAL([USE_AIRPLAY_2], [test "x$with_airplay_2" = "xyes"])
 
@@ -443,13 +505,6 @@ if  test "x${with_systemd}" = xyes ; then
   AS_IF([test "x$with_systemdsystemunitdir" != "xno"],
         [AC_SUBST([systemdsystemunitdir], [$with_systemdsystemunitdir])])
 fi
-
-# Look for xmltoman
-AC_CHECK_PROGS([XMLTOMAN], [xmltoman])
-if test -z "$XMLTOMAN"; then
-  AC_MSG_WARN([xmltoman not found - not rebuilding man pages])
-fi
-AM_CONDITIONAL([HAVE_XMLTOMAN], [test -n "$XMLTOMAN"])
 
 # Checks for header files.
 AC_CHECK_HEADERS([getopt_long.h])
@@ -475,6 +530,6 @@ AC_FUNC_FORK
 AC_CHECK_FUNCS([atexit clock_gettime gethostname inet_ntoa memchr memmove memset mkfifo pow select socket stpcpy strcasecmp strchr strdup strerror strstr strtol strtoul])
 
 # Note -- there are AC_CONFIG_FILES directives further back, conditional on Avahi
-AC_CONFIG_FILES([Makefile man/Makefile])
+AC_CONFIG_FILES([Makefile])
 AC_CONFIG_FILES([scripts/shairport-sync],[chmod +x scripts/shairport-sync])
 AC_OUTPUT

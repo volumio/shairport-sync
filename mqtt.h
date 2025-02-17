@@ -7,6 +7,7 @@ int initialise_mqtt();
 void mqtt_process_metadata(uint32_t type, uint32_t code, char *data, uint32_t length);
 void mqtt_publish(char *topic, char *data, uint32_t length);
 void mqtt_setup();
+void send_autodiscovery_messages(struct mosquitto *mosq);
 void on_connect(struct mosquitto *mosq, void *userdata, int rc);
 void on_disconnect(struct mosquitto *mosq, void *userdata, int rc);
 void on_message(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *msg);

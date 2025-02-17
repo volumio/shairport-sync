@@ -1,8 +1,0 @@
-#!/command/with-contenv sh
-sleep 5
-while [ ! -f /var/run/dbus.pid ]; do
-  "dbus is not running, sleeping for 5 seconds before trying to start avahi"
-  sleep 5
-done
-echo "Starting avahi"
-exec avahi-daemon --no-chroot

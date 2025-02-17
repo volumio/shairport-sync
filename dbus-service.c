@@ -68,6 +68,8 @@ void dbus_metadata_watcher(struct metadata_bundle *argc, __attribute__((unused))
                                                    argc->airplay_volume);
 
   shairport_sync_remote_control_set_client(shairportSyncRemoteControlSkeleton, argc->client_ip);
+  shairport_sync_remote_control_set_client_name(shairportSyncRemoteControlSkeleton,
+                                                argc->client_name);
 
   // although it's a DACP server, the server is in fact, part of the the AirPlay "client" (their
   // term).
@@ -92,6 +94,35 @@ void dbus_metadata_watcher(struct metadata_bundle *argc, __attribute__((unused))
       // debug(1, "Progress string should be changed");
       shairport_sync_remote_control_set_progress_string(shairportSyncRemoteControlSkeleton,
                                                         argc->progress_string);
+    }
+  }
+
+  if (argc->frame_position_string) {
+    // debug(1, "Check frame position string");
+    th = shairport_sync_get_frame_position(shairportSyncSkeleton);
+    if ((th == NULL) || (strcasecmp(th, argc->frame_position_string) != 0)) {
+      // debug(1, "Frame position string should be changed");
+      shairport_sync_set_frame_position(shairportSyncSkeleton, argc->frame_position_string);
+    }
+  }
+
+  if (argc->first_frame_position_string) {
+    // debug(1, "Check first frame position string");
+    th = shairport_sync_get_first_frame_position(shairportSyncSkeleton);
+    if ((th == NULL) || (strcasecmp(th, argc->first_frame_position_string) != 0)) {
+      // debug(1, "First frame position string should be changed");
+      shairport_sync_set_first_frame_position(shairportSyncSkeleton,
+                                              argc->first_frame_position_string);
+    }
+  }
+
+  if (argc->stream_type) {
+    // debug(1, "Check stream type");
+    th = shairport_sync_remote_control_get_stream_type(shairportSyncRemoteControlSkeleton);
+    if ((th == NULL) || (strcasecmp(th, argc->stream_type) != 0)) {
+      // debug(1, "Stream type string should be changed");
+      shairport_sync_remote_control_set_stream_type(shairportSyncRemoteControlSkeleton,
+                                                    argc->stream_type);
     }
   }
 
@@ -201,13 +232,22 @@ void dbus_metadata_watcher(struct metadata_bundle *argc, __attribute__((unused))
     g_variant_builder_add(dict_builder, "{sv}", "mpris:artUrl", artUrl);
   }
 
-  // Add in the Track ID based on the 'mper' metadata if it is non-zero
-  if (argc->item_id != 0) {
+  // Add in the Track ID based on the 'mper' metadata if it is valid
+  if (argc->item_id_is_valid != 0) {
     char trackidstring[128];
     snprintf(trackidstring, sizeof(trackidstring), "/org/gnome/ShairportSync/%" PRIX64 "",
              argc->item_id);
     GVariant *trackid = g_variant_new("o", trackidstring);
     g_variant_builder_add(dict_builder, "{sv}", "mpris:trackid", trackid);
+  }
+
+  // Add in the Song Data Kind based on the 'asdk' metadata if it is valid
+  // It seems that this is 0 for a timed play, e.g. a track or an album, but is 1 for an untimed
+  // play, such as a stream.
+
+  if (argc->song_data_kind_is_valid != 0) {
+    GVariant *songdatakind = g_variant_new_uint32(argc->song_data_kind);
+    g_variant_builder_add(dict_builder, "{sv}", "sps:songdatakind", songdatakind);
   }
 
   // Add the track name if it exists
@@ -222,7 +262,7 @@ void dbus_metadata_watcher(struct metadata_bundle *argc, __attribute__((unused))
     g_variant_builder_add(dict_builder, "{sv}", "xesam:album", album_name);
   }
 
-  // Add the artist name if it exists
+  // Add the artist name list if it exists
   if (argc->artist_name) {
     GVariantBuilder *artist_as = g_variant_builder_new(G_VARIANT_TYPE("as"));
     g_variant_builder_add(artist_as, "s", argc->artist_name);
@@ -231,7 +271,25 @@ void dbus_metadata_watcher(struct metadata_bundle *argc, __attribute__((unused))
     g_variant_builder_add(dict_builder, "{sv}", "xesam:artist", artists);
   }
 
-  // Add the genre if it exists
+  // Add the album artist list if it exists
+  if (argc->album_artist_name) {
+    GVariantBuilder *album_artist_as = g_variant_builder_new(G_VARIANT_TYPE("as"));
+    g_variant_builder_add(album_artist_as, "s", argc->album_artist_name);
+    GVariant *album_artists = g_variant_builder_end(album_artist_as);
+    g_variant_builder_unref(album_artist_as);
+    g_variant_builder_add(dict_builder, "{sv}", "xesam:albumArtist", album_artists);
+  }
+
+  // Add the composer list if it exists
+  if (argc->composer) {
+    GVariantBuilder *composer_as = g_variant_builder_new(G_VARIANT_TYPE("as"));
+    g_variant_builder_add(composer_as, "s", argc->composer);
+    GVariant *composers = g_variant_builder_end(composer_as);
+    g_variant_builder_unref(composer_as);
+    g_variant_builder_add(dict_builder, "{sv}", "xesam:composer", composers);
+  }
+
+  // Add the genre list if it exists
   if (argc->genre) {
     GVariantBuilder *genre_as = g_variant_builder_new(G_VARIANT_TYPE("as"));
     g_variant_builder_add(genre_as, "s", argc->genre);
@@ -240,11 +298,11 @@ void dbus_metadata_watcher(struct metadata_bundle *argc, __attribute__((unused))
     g_variant_builder_add(dict_builder, "{sv}", "xesam:genre", genre);
   }
 
-  if (argc->songtime_in_milliseconds) {
+  if (argc->songtime_in_milliseconds_is_valid != 0) {
     uint64_t track_length_in_microseconds = argc->songtime_in_milliseconds;
     track_length_in_microseconds *= 1000; // to microseconds in 64-bit precision
                                           // Make up the track name and album name
-    // debug(1, "Set tracklength to %lu.", track_length_in_microseconds);
+    // debug(1, "Set tracklength to %" PRId64 ".", track_length_in_microseconds);
     GVariant *tracklength = g_variant_new("x", track_length_in_microseconds);
     g_variant_builder_add(dict_builder, "{sv}", "mpris:length", tracklength);
   }
@@ -577,12 +635,17 @@ gboolean notify_volume_callback(ShairportSync *skeleton,
   if (((iv >= -30.0) && (iv <= 0.0)) || (iv == -144.0)) {
     debug(2, ">> setting volume to %7.4f.", iv);
 
-    lock_player();
-    config.airplay_volume = iv;
-    if (playing_conn != NULL)
-      player_volume(iv, playing_conn);
-    unlock_player();
+    pthread_rwlock_rdlock(&principal_conn_lock); // don't let the principal_conn be changed
+    pthread_cleanup_push(rwlock_unlock, (void *)&principal_conn_lock);
 
+    if (principal_conn != NULL) {
+      player_volume(iv, principal_conn);
+      principal_conn->own_airplay_volume = iv;
+      principal_conn->own_airplay_volume_set = 1;
+    }
+    pthread_cleanup_pop(1); // release the principal_conn lock
+    config.airplay_volume = iv;
+    config.last_access_to_volume_info_time = get_absolute_time_in_ns();
   } else {
     debug(1, ">> invalid volume: %f. Ignored.", iv);
     shairport_sync_set_volume(skeleton, config.airplay_volume);
@@ -704,6 +767,8 @@ gboolean notify_volume_control_profile_callback(ShairportSync *skeleton,
     config.volume_control_profile = VCP_standard;
   else if (strcasecmp(th, "flat") == 0)
     config.volume_control_profile = VCP_flat;
+  else if (strcasecmp(th, "dasl_tapered") == 0)
+    config.volume_control_profile = VCP_dasl_tapered;
   else {
     warn("Unrecognised Volume Control Profile: \"%s\".", th);
     switch (config.volume_control_profile) {
@@ -712,6 +777,9 @@ gboolean notify_volume_control_profile_callback(ShairportSync *skeleton,
       break;
     case VCP_flat:
       shairport_sync_set_volume_control_profile(skeleton, "flat");
+      break;
+    case VCP_dasl_tapered:
+      shairport_sync_set_volume_control_profile(skeleton, "dasl_tapered");
       break;
     default:
       debug(1, "This should never happen!");
@@ -807,10 +875,19 @@ static gboolean on_handle_remote_command(ShairportSync *skeleton, GDBusMethodInv
 
 static gboolean on_handle_drop_session(ShairportSync *skeleton, GDBusMethodInvocation *invocation,
                                        __attribute__((unused)) gpointer user_data) {
-  if (playing_conn != NULL)
-    debug(1, ">> stopping current play session");
   get_play_lock(NULL, 1); // stop any current session and don't replace it
   shairport_sync_complete_drop_session(skeleton, invocation);
+  return TRUE;
+}
+
+static gboolean on_handle_set_frame_position_update_interval(ShairportSync *skeleton,
+                                                             GDBusMethodInvocation *invocation,
+                                                             const gdouble seconds,
+                                                             __attribute__((unused))
+                                                             gpointer user_data) {
+  debug(1, ">> set frame position update interval to %.6f.", seconds);
+  config.metadata_progress_interval = seconds;
+  shairport_sync_complete_set_frame_position_update_interval(skeleton, invocation);
   return TRUE;
 }
 
@@ -871,6 +948,9 @@ static void on_dbus_name_acquired(GDBusConnection *connection, const gchar *name
 
   g_signal_connect(shairportSyncSkeleton, "handle-drop-session", G_CALLBACK(on_handle_drop_session),
                    NULL);
+
+  g_signal_connect(shairportSyncSkeleton, "handle-set-frame-position-update-interval",
+                   G_CALLBACK(on_handle_set_frame_position_update_interval), NULL);
 
   g_signal_connect(shairportSyncDiagnosticsSkeleton, "notify::verbosity",
                    G_CALLBACK(notify_verbosity_callback), NULL);
@@ -990,6 +1070,9 @@ static void on_dbus_name_acquired(GDBusConnection *connection, const gchar *name
 
   if (config.volume_control_profile == VCP_standard)
     shairport_sync_set_volume_control_profile(SHAIRPORT_SYNC(shairportSyncSkeleton), "standard");
+  else if (config.volume_control_profile == VCP_dasl_tapered)
+    shairport_sync_set_volume_control_profile(SHAIRPORT_SYNC(shairportSyncSkeleton),
+                                              "dasl_tapered");
   else
     shairport_sync_set_volume_control_profile(SHAIRPORT_SYNC(shairportSyncSkeleton), "flat");
 
@@ -1018,6 +1101,11 @@ static void on_dbus_name_acquired(GDBusConnection *connection, const gchar *name
 //    shairport_sync_set_convolution_impulse_response_file(SHAIRPORT_SYNC(shairportSyncSkeleton),
 //    NULL);
 #endif
+
+  shairport_sync_set_service_name(SHAIRPORT_SYNC(shairportSyncSkeleton), config.service_name);
+  shairport_sync_set_output_rate(SHAIRPORT_SYNC(shairportSyncSkeleton), config.output_rate);
+  shairport_sync_set_output_format(SHAIRPORT_SYNC(shairportSyncSkeleton),
+                                   sps_format_description_string(config.output_format));
 
 #ifdef CONFIG_AIRPLAY_2
   shairport_sync_set_protocol(SHAIRPORT_SYNC(shairportSyncSkeleton), "AirPlay 2");
@@ -1129,10 +1217,11 @@ int start_dbus_service() {
 
 void stop_dbus_service() {
   debug(2, "stopping dbus service");
-  if (ownerID)
+  if (ownerID) {
     g_bus_unown_name(ownerID);
-  else
-    debug(1, "Zero OwnerID for \"org.gnome.ShairportSync\".");
+  } else if (service_is_running != 0) {
+    debug(1, "Zero OwnerID for running \"org.gnome.ShairportSync\" dbus service.");
+  }
   service_is_running = 0;
 }
 

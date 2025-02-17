@@ -1,0 +1,6 @@
+tinyhttp/lib_tinyhttp_a-header.o: tinyhttp/header.c \
+ /usr/include/stdc-predef.h tinyhttp/header.h
+
+/usr/include/stdc-predef.h:
+
+tinyhttp/header.h:

@@ -141,7 +141,9 @@ static void deinit(void) {
     close(fd);
 }
 
-static void help(void) { printf("    specify the pathname of the pipe to write to.\n"); }
+static void help(void) {
+  printf("    Provide the pipe's pathname. The default is \"%s\".\n", default_pipe_name);
+}
 
 audio_output audio_pipe = {.name = "pipe",
                            .help = &help,

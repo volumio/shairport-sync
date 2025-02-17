@@ -9,7 +9,6 @@
 
 #ifdef CONFIG_MBEDTLS
 #include <mbedtls/aes.h>
-#include <mbedtls/havege.h>
 #endif
 
 #ifdef CONFIG_POLARSSL
@@ -107,7 +106,8 @@ typedef enum {
   unspecified_stream_category = 0,
   ptp_stream,
   ntp_stream,
-  remote_control_stream
+  remote_control_stream,
+  classic_airplay_stream
 } airplay_stream_c; // "c" for category
 
 #ifdef CONFIG_AIRPLAY_2
@@ -167,15 +167,11 @@ typedef struct {
   SOCKADDR remote, local;
   volatile int stop;
   volatile int running;
-  volatile uint64_t watchdog_bark_time;
-  volatile int watchdog_barks;  // number of times the watchdog has timed out and done something
-  int unfixable_error_reported; // set when an unfixable error command has been executed.
 
   uint64_t playstart;
   uint64_t connection_start_time; // the time the device is selected, which could be a long time
                                   // before a play
-  pthread_t thread, timer_requester, rtp_audio_thread, rtp_control_thread, rtp_timing_thread,
-      player_watchdog_thread;
+  pthread_t thread, timer_requester, rtp_audio_thread, rtp_control_thread, rtp_timing_thread;
 
   // buffers to delete on exit
   int32_t *tbuf;
@@ -222,11 +218,11 @@ typedef struct {
   int32_t last_seqno_read;
   // mutexes and condition variables
   pthread_cond_t flowcontrol;
-  pthread_mutex_t ab_mutex, flush_mutex, volume_control_mutex;
+  pthread_mutex_t ab_mutex, flush_mutex, volume_control_mutex, player_create_delete_mutex;
 
   int fix_volume;
-  double initial_airplay_volume;
-  int initial_airplay_volume_set;
+  double own_airplay_volume;
+  int own_airplay_volume_set;
 
   uint32_t timestamp_epoch, last_timestamp,
       maximum_timestamp_interval; // timestamp_epoch of zero means not initialised, could start at 2
@@ -245,10 +241,6 @@ typedef struct {
 
 #ifdef CONFIG_POLARSSL
   aes_context dctx;
-#endif
-
-#ifdef CONFIG_OPENSSL
-  AES_KEY aes;
 #endif
 
   int amountStuffed;
@@ -385,7 +377,6 @@ typedef struct {
                            // request in flight at the same time
 
   pthread_mutex_t reference_time_mutex;
-  pthread_mutex_t watchdog_mutex;
 
   double local_to_remote_time_gradient; // if no drift, this would be exactly 1.0; likely it's
                                         // slightly above or  below.
@@ -419,7 +410,6 @@ typedef struct {
   uint64_t dac_buffer_queue_minimum_length;
 } rtsp_conn_info;
 
-extern pthread_mutex_t playing_conn_lock;
 extern int statistics_row; // will be reset to zero when debug level changes or statistics enabled
 
 void reset_buffer(rtsp_conn_info *conn);
@@ -448,5 +438,7 @@ int64_t monotonic_timestamp(uint32_t timestamp,
 // which is about 2*10^8 * 1,000 seconds at 384,000 frames per second -- about 2 trillion seconds.
 // assumes, without checking, that successive timestamps in a series always span an interval of less
 // than one minute.
+
+double suggested_volume(rtsp_conn_info *conn); // volume suggested for the connection
 
 #endif //_PLAYER_H

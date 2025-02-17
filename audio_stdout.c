@@ -37,21 +37,22 @@
 #include <unistd.h>
 
 static int fd = -1;
+static int warned = 0;
 
 static void start(__attribute__((unused)) int sample_rate,
                   __attribute__((unused)) int sample_format) {
   fd = STDOUT_FILENO;
+  warned = 0;
 }
 
 static int play(void *buf, int samples, __attribute__((unused)) int sample_type,
                 __attribute__((unused)) uint32_t timestamp,
                 __attribute__((unused)) uint64_t playtime) {
   char errorstring[1024];
-  int warned = 0;
   int rc = write(fd, buf, samples * 4);
   if ((rc < 0) && (warned == 0)) {
     strerror_r(errno, (char *)errorstring, 1024);
-    warn("Error %d writing to stdout: \"%s\".", errno, errorstring);
+    warn("Error %d writing to stdout (fd: %d): \"%s\".", errno, fd, errorstring);
     warned = 1;
   }
   return rc;

@@ -1,0 +1,3 @@
+#!/command/with-contenv sh
+echo "Starting avahi"
+exec s6-notifyoncheck avahi-daemon --no-chroot

@@ -60,7 +60,7 @@ getent passwd %{name} &> /dev/null || useradd --system -c "%{name} User" \
 %files
 %config(noreplace) /etc/shairport-sync.conf
 /usr/bin/shairport-sync
-/usr/share/man/man7/shairport-sync.7.gz
+/usr/share/man/man1/shairport-sync.1.gz
 %{_unitdir}/%{name}.service
 %doc README.md RELEASENOTES.md TROUBLESHOOTING.md
 %license LICENSES

@@ -1,6 +1,6 @@
 /*
- * Asynchronous Pipewire Backend. This file is part of Shairport Sync.
- * Copyright (c) Shairport Sync 2021--2022
+ * Asynchronous PipeWire Backend. This file is part of Shairport Sync.
+ * Copyright (c) Mike Brady 2023
  * All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person
@@ -24,490 +24,392 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
+// This uses ideas from the tone generator sample code at:
+// https://github.com/PipeWire/pipewire/blob/master/src/examples/audio-src.c
+// Thanks to Wim Taymans.
+
 #include "audio.h"
 #include "common.h"
+#include <errno.h>
+#include <pthread.h>
+#include <stdio.h>
+#include <string.h>
+#include <unistd.h>
 
 #include <pipewire/pipewire.h>
-#include <pipewire/stream.h>
 #include <spa/param/audio/format-utils.h>
-#include <spa/param/audio/layout.h>
-#include <spa/utils/result.h>
 
-#include <math.h>
+// note -- these are hardwired into this code.
+#define DEFAULT_FORMAT SPA_AUDIO_FORMAT_S16_LE
+#define DEFAULT_BYTES_PER_SAMPLE 2
 
-#define PW_TIMEOUT_S 5
-#define SECONDS_TO_NANOSECONDS 1000000000L
-#define PW_TIMEOUT_NS (PW_TIMEOUT_S * SECONDS_TO_NANOSECONDS)
+#define DEFAULT_RATE 44100
+#define DEFAULT_CHANNELS 2
+#define DEFAULT_BUFFER_SIZE_IN_SECONDS 4
 
-struct pw_data {
-  struct pw_thread_loop *mainloop;
-  struct pw_context *context;
+// Four seconds buffer -- should be plenty
+#define buffer_allocation DEFAULT_RATE * DEFAULT_BUFFER_SIZE_IN_SECONDS * DEFAULT_BYTES_PER_SAMPLE * DEFAULT_CHANNELS
 
-  struct pw_core *core;
-  struct spa_hook core_listener;
+static pthread_mutex_t buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-  struct pw_registry *registry;
-  struct spa_hook registry_listener;
+static char *audio_lmb, *audio_umb, *audio_toq, *audio_eoq;
+static size_t audio_size = buffer_allocation;
+static size_t audio_occupancy;
+static int enable_fill;
+static int stream_is_active;
 
+struct timing_data {
+  int pw_time_is_valid;     // set when the pw_time has been set
+  struct pw_time time_info; // information about the last time a process callback occurred
+  size_t frames;            // the number of frames sent at that time
+};
+
+// to avoid using a mutex, write the same data twice and check they are the same
+// to ensure they are consistent. Make sure the first is written strictly before the second
+// using __sync_synchronize();
+struct timing_data timing_data_1, timing_data_2;
+
+struct data {
+  struct pw_thread_loop *loop;
   struct pw_stream *stream;
-  struct spa_hook stream_listener;
-
-  struct pw_buffer *pw_buffer;
-
-  struct pw_properties *props;
-  int sync;
-
-  enum spa_audio_format format;
-  uint32_t rate;
-  uint32_t channels;
-  uint32_t stride;
-  uint32_t latency;
-
-} data;
-
-static void on_core_info(__attribute__((unused)) void *userdata, const struct pw_core_info *info) {
-  debug(1, "pw: remote %" PRIu32 " is named \"%s\"", info->id, info->name);
-}
-
-static void on_core_error(__attribute__((unused)) void *userdata, uint32_t id, int seq, int res,
-                          const char *message) {
-  warn("pw: remote error: id=%" PRIu32 " seq:%d res:%d (%s): %s", id, seq, res, spa_strerror(res),
-       message);
-}
-
-static const struct pw_core_events core_events = {
-    PW_VERSION_CORE_EVENTS,
-    .info = on_core_info,
-    .error = on_core_error,
 };
 
-static void registry_event_global(__attribute__((unused)) void *userdata, uint32_t id,
-                                  __attribute__((unused)) uint32_t permissions, const char *type,
-                                  __attribute__((unused)) uint32_t version,
-                                  const struct spa_dict *props) {
-  const struct spa_dict_item *item;
-  const char *name, *media_class;
+// the pipewire global data structure
+struct data data = {NULL, NULL};
 
-  if (strcmp(type, PW_TYPE_INTERFACE_Node) == 0) {
-    name = spa_dict_lookup(props, PW_KEY_NODE_NAME);
-    media_class = spa_dict_lookup(props, PW_KEY_MEDIA_CLASS);
-
-    if (!name || !media_class)
-      return;
-
-    debug(1, "pw: registry: id=%" PRIu32 " type=%s name=\"%s\" media_class=\"%s\"", id, type, name,
-          media_class);
-
-    spa_dict_for_each(item, props) { debug(1, "pw: \t\t%s = \"%s\"", item->key, item->value); }
-  }
-}
-
-static void registry_event_global_remove(__attribute__((unused)) void *userdata, uint32_t id) {
-  debug(1, "pw: registry: remove id=%" PRIu32 "", id);
-}
-
-static const struct pw_registry_events registry_events = {
-    PW_VERSION_REGISTRY_EVENTS,
-    .global = registry_event_global,
-    .global_remove = registry_event_global_remove,
-};
-
-static void on_state_changed(void *userdata, enum pw_stream_state old, enum pw_stream_state state,
-                             const char *error) {
-  struct pw_data *pipewire = userdata;
-
-  debug(1, "pw: stream state changed %s -> %s", pw_stream_state_as_string(old),
+/*
+static void on_state_changed(__attribute__((unused)) void *userdata, enum pw_stream_state old,
+                             enum pw_stream_state state,
+                             __attribute__((unused)) const char *error) {
+  // struct pw_data *pw = userdata;
+  debug(3, "pw: stream state changed %s -> %s", pw_stream_state_as_string(old),
         pw_stream_state_as_string(state));
-
-  if (state == PW_STREAM_STATE_STREAMING)
-    debug(1, "pw: stream node %" PRIu32 "", pw_stream_get_node_id(pipewire->stream));
-
-  if (state == PW_STREAM_STATE_ERROR)
-    debug(1, "pw: stream node %" PRIu32 " error: %s", pw_stream_get_node_id(pipewire->stream),
-          error);
-
-  pw_thread_loop_signal(pipewire->mainloop, 0);
 }
+*/
 
 static void on_process(void *userdata) {
-  struct pw_data *pipewire = userdata;
 
-  pw_thread_loop_signal(pipewire->mainloop, 0);
+  struct data *data = userdata;
+  int n_frames = 0;
+
+  pthread_mutex_lock(&buffer_mutex);
+
+  if ((audio_occupancy > 0) || (enable_fill)) {
+
+    // get a buffer to see how big it can be
+    struct pw_buffer *b = pw_stream_dequeue_buffer(data->stream);
+    if (b == NULL) {
+      pw_log_warn("out of buffers: %m");
+      die("PipeWire failure -- out of buffers!");
+    }
+    struct spa_buffer *buf = b->buffer;
+    uint8_t *dest = buf->datas[0].data;
+    if (dest != NULL) {
+      int stride = DEFAULT_BYTES_PER_SAMPLE * DEFAULT_CHANNELS;
+      
+      // note: the requested field is the number of frames, not bytes, requested
+      int max_possible_frames = SPA_MIN(b->requested, buf->datas[0].maxsize / stride);
+
+      size_t bytes_we_can_transfer = max_possible_frames * stride;
+
+      if (audio_occupancy > 0) {
+        // if (enable_fill == 1)) {
+        //   debug(1, "got audio -- disable_fill");
+        // }
+        enable_fill = 0;
+
+        if (bytes_we_can_transfer > audio_occupancy)
+          bytes_we_can_transfer = audio_occupancy;
+
+        n_frames = bytes_we_can_transfer / stride;
+
+        size_t bytes_to_end_of_buffer = (size_t)(audio_umb - audio_toq); // must be zero or positive
+        if (bytes_we_can_transfer <= bytes_to_end_of_buffer) {
+          // the bytes are all in a row in the audio buffer
+          memcpy(dest, audio_toq, bytes_we_can_transfer);
+          audio_toq += bytes_we_can_transfer;
+        } else {
+          // the bytes are in two places in the audio buffer
+          size_t first_portion_to_write = audio_umb - audio_toq;
+          if (first_portion_to_write != 0)
+            memcpy(dest, audio_toq, first_portion_to_write);
+          uint8_t *new_dest = dest + first_portion_to_write;
+          memcpy(new_dest, audio_lmb, bytes_we_can_transfer - first_portion_to_write);
+          audio_toq = audio_lmb + bytes_we_can_transfer - first_portion_to_write;
+        }
+        audio_occupancy -= bytes_we_can_transfer;
+
+      } else {
+        debug(3, "send silence");
+        // this should really be dithered silence
+        memset(dest, 0, bytes_we_can_transfer);
+        n_frames = max_possible_frames;
+      }
+      buf->datas[0].chunk->offset = 0;
+      buf->datas[0].chunk->stride = stride;
+      buf->datas[0].chunk->size = n_frames * stride;
+      pw_stream_queue_buffer(data->stream, b);
+      debug(3, "Queueing %d frames for output.", n_frames);
+    } // (else the first data block does not contain a data pointer)
+  }
+  pthread_mutex_unlock(&buffer_mutex);
+
+  timing_data_1.frames = n_frames;
+  if (pw_stream_get_time_n(data->stream, &timing_data_1.time_info, sizeof(struct timing_data)) == 0)
+    timing_data_1.pw_time_is_valid = 1;
+  else
+    timing_data_1.pw_time_is_valid = 0;
+  __sync_synchronize();
+  memcpy((char *)&timing_data_2, (char *)&timing_data_1, sizeof(struct timing_data));
+  __sync_synchronize();
 }
 
-static void on_drained(void *userdata) {
-  struct pw_data *pipewire = userdata;
+static const struct pw_stream_events stream_events = {PW_VERSION_STREAM_EVENTS,
+                                                      .process = on_process};
+//    PW_VERSION_STREAM_EVENTS, .process = on_process, .state_changed = on_state_changed};
 
-  pw_stream_set_active(pipewire->stream, false);
-
-  pw_thread_loop_signal(pipewire->mainloop, 0);
-}
-
-static const struct pw_stream_events stream_events = {
-    PW_VERSION_STREAM_EVENTS,
-    .state_changed = on_state_changed,
-    .process = on_process,
-    .drained = on_drained,
-};
-
-static void deinit() {
-  pw_thread_loop_stop(data.mainloop);
-
-  if (data.stream) {
-    pw_stream_destroy(data.stream);
-    data.stream = NULL;
-  }
-
-  if (data.registry) {
-    pw_proxy_destroy((struct pw_proxy *)data.registry);
-    data.registry = NULL;
-  }
-
-  if (data.core) {
-    pw_core_disconnect(data.core);
-    data.core = NULL;
-  }
-
-  if (data.context) {
-    pw_context_destroy(data.context);
-    data.context = NULL;
-  }
-
-  if (data.mainloop) {
-    pw_thread_loop_destroy(data.mainloop);
-    data.mainloop = NULL;
-  }
-
-  if (data.props) {
-    pw_properties_free(data.props);
-    data.props = NULL;
-  }
-
-  pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
+static void deinit(void) {
+  pw_thread_loop_stop(data.loop);
+  pw_stream_destroy(data.stream);
+  pw_thread_loop_destroy(data.loop);
+  pw_deinit();
+  free(audio_lmb); // deallocate that buffer
 }
 
 static int init(__attribute__((unused)) int argc, __attribute__((unused)) char **argv) {
-
-  struct pw_loop *loop;
-  struct pw_properties *props;
-
   // set up default values first
+  memset(&timing_data_1, 0, sizeof(struct timing_data));
+  memset(&timing_data_2, 0, sizeof(struct timing_data));
   config.audio_backend_buffer_desired_length = 0.35;
-  config.audio_backend_buffer_interpolation_threshold_in_seconds = 0.02;
+  config.audio_backend_buffer_interpolation_threshold_in_seconds =
+      0.02; // below this, soxr interpolation will not occur -- it'll be basic interpolation
+            // instead.
+
   config.audio_backend_latency_offset = 0;
 
-  pw_init(NULL, NULL);
+  // get settings from settings file
+  // do the "general" audio  options. Note, these options are in the "general" stanza!
+  parse_general_audio_options();
+ 
+    // now any PipeWire-specific options
+    if (config.cfg != NULL) {
+      const char *str;
 
-  debug(1, "pw: compiled with libpipewire %s", pw_get_headers_version());
-  debug(1, "pw: linked with libpipewire: %s", pw_get_library_version());
+      // Get the optional Application Name, if provided.
+      if (config_lookup_string(config.cfg, "pw.application_name", &str)) {
+        config.pw_application_name = (char *)str;
+      }
 
-  data.props = pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_MEDIA_CATEGORY, "Playback",
-                                 PW_KEY_MEDIA_ROLE, "Music", PW_KEY_APP_NAME, "shairport-sync",
-                                 PW_KEY_NODE_NAME, "shairport-sync", NULL);
+      // Get the optional PipeWire node name, if provided.
+      if (config_lookup_string(config.cfg, "pw.node_name", &str)) {
+        config.pw_node_name = (char *)str;
+      }      
 
-  if (!data.props) {
-    deinit();
-    die("pw: pw_properties_new() failed: %m");
-  }
+      // Get the optional PipeWire sink target name, if provided.
+      if (config_lookup_string(config.cfg, "pw.sink_target", &str)) {
+        config.pw_sink_target = (char *)str;
+      }      
+    }
+  
+  // finished collecting settings
 
-  data.mainloop = pw_thread_loop_new("pipewire", NULL);
-  if (!data.mainloop) {
-    deinit();
-    die("pw: pw_thread_loop_new_full() failed: %m");
-  }
-
-  props = pw_properties_new(PW_KEY_CONFIG_NAME, "client-rt.conf", NULL);
-  if (!props) {
-    deinit();
-    die("pw: pw_properties_new() failed: %m");
-  }
-
-  loop = pw_thread_loop_get_loop(data.mainloop);
-
-  data.context = pw_context_new(loop, props, 0);
-  if (!data.context) {
-    deinit();
-    die("pw: pw_context_new() failed: %m");
-  }
-
-  props = pw_properties_new(PW_KEY_REMOTE_NAME, NULL, NULL);
-  if (!props) {
-    deinit();
-    die("pw: pw_properties_new() failed: %m");
-  }
-
-  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-  pw_thread_loop_lock(data.mainloop);
-
-  if (pw_thread_loop_start(data.mainloop) != 0) {
-    deinit();
-    die("pw: pw_thread_loop_start() failed: %m");
-  }
-
-  data.core = pw_context_connect(data.context, props, 0);
-  if (!data.core) {
-    deinit();
-    die("pw: pw_context_connect() failed: %m");
-  }
-
-  pw_core_add_listener(data.core, &data.core_listener, &core_events, &data);
-
-  data.registry = pw_core_get_registry(data.core, PW_VERSION_REGISTRY, 0);
-  if (!data.registry) {
-    deinit();
-    die("pw: pw_core_get_registry() failed: %m");
-  }
-
-  pw_registry_add_listener(data.registry, &data.registry_listener, &registry_events, &data);
-
-  data.sync = pw_core_sync(data.core, 0, data.sync);
-
-  pw_thread_loop_unlock(data.mainloop);
-  pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-
-  return 0;
-}
-
-static enum spa_audio_format sps_format_to_spa_format(sps_format_t sps_format) {
-  switch (sps_format) {
-  case SPS_FORMAT_S8:
-    return SPA_AUDIO_FORMAT_S8;
-  case SPS_FORMAT_U8:
-    return SPA_AUDIO_FORMAT_U8;
-  case SPS_FORMAT_S16:
-    return SPA_AUDIO_FORMAT_S16;
-  case SPS_FORMAT_S16_LE:
-    return SPA_AUDIO_FORMAT_S16_LE;
-  case SPS_FORMAT_S16_BE:
-    return SPA_AUDIO_FORMAT_S16_BE;
-  case SPS_FORMAT_S24:
-    return SPA_AUDIO_FORMAT_S24_32;
-  case SPS_FORMAT_S24_LE:
-    return SPA_AUDIO_FORMAT_S24_32_LE;
-  case SPS_FORMAT_S24_BE:
-    return SPA_AUDIO_FORMAT_S24_32_BE;
-  case SPS_FORMAT_S24_3LE:
-    return SPA_AUDIO_FORMAT_S24_LE;
-  case SPS_FORMAT_S24_3BE:
-    return SPA_AUDIO_FORMAT_S24_BE;
-  case SPS_FORMAT_S32:
-    return SPA_AUDIO_FORMAT_S32;
-  case SPS_FORMAT_S32_LE:
-    return SPA_AUDIO_FORMAT_S32_LE;
-  case SPS_FORMAT_S32_BE:
-    return SPA_AUDIO_FORMAT_S32_BE;
-
-  case SPS_FORMAT_UNKNOWN:
-  case SPS_FORMAT_AUTO:
-  case SPS_FORMAT_INVALID:
-  default:
-    return SPA_AUDIO_FORMAT_S16;
-  }
-}
-
-static int spa_format_samplesize(enum spa_audio_format audio_format) {
-  switch (audio_format) {
-  case SPA_AUDIO_FORMAT_S8:
-  case SPA_AUDIO_FORMAT_U8:
-    return 1;
-  case SPA_AUDIO_FORMAT_S16:
-    return 2;
-  case SPA_AUDIO_FORMAT_S24:
-    return 3;
-  case SPA_AUDIO_FORMAT_S24_32:
-  case SPA_AUDIO_FORMAT_S32:
-    return 4;
-  default:
-    die("pw: unhandled spa_audio_format: %d", audio_format);
-    return -1;
-  }
-}
-
-static const char *spa_format_to_str(enum spa_audio_format audio_format) {
-  switch (audio_format) {
-  case SPA_AUDIO_FORMAT_U8:
-    return "u8";
-  case SPA_AUDIO_FORMAT_S8:
-    return "s8";
-  case SPA_AUDIO_FORMAT_S16:
-    return "s16";
-  case SPA_AUDIO_FORMAT_S24:
-  case SPA_AUDIO_FORMAT_S24_32:
-    return "s24";
-  case SPA_AUDIO_FORMAT_S32:
-    return "s32";
-  default:
-    die("pw: unhandled spa_audio_format: %d", audio_format);
-    return "(invalid)";
-  }
-}
-
-static void start(int sample_rate, int sample_format) {
-
-  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-
-  pw_thread_loop_lock(data.mainloop);
+  // allocate space for the audio buffer
+  audio_lmb = malloc(audio_size);
+  if (audio_lmb == NULL)
+    die("Can't allocate %d bytes for PipeWire buffer.", audio_size);
+  audio_toq = audio_eoq = audio_lmb;
+  audio_umb = audio_lmb + audio_size;
+  audio_occupancy = 0;
+  // debug(1, "init enable_fill");
+  enable_fill = 1;
 
   const struct spa_pod *params[1];
   uint8_t buffer[1024];
-  struct spa_pod_builder pod_builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-  struct spa_audio_info_raw info;
-  uint32_t nom;
-  int ret;
+  struct pw_properties *props;
+  struct spa_pod_builder b = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
 
-  data.format = sps_format_to_spa_format(sample_format);
-  data.rate = sample_rate;
-  data.channels = 2;
-  data.stride = spa_format_samplesize(data.format) * data.channels;
-  data.latency = 20000;
+  int largc = 0;
+  pw_init(&largc, NULL);
 
-  nom = nearbyint((data.latency * data.rate) / 1000000.0);
+  /* make a threaded loop. */
+  data.loop = pw_thread_loop_new("shairport-sync", NULL);
 
-  pw_properties_setf(data.props, PW_KEY_NODE_LATENCY, "%u/%u", nom, data.rate);
+  pw_thread_loop_lock(data.loop);
 
-  debug(1, "pw: rate: %d", data.rate);
-  debug(1, "pw: channgels: %d", data.channels);
-  debug(1, "pw: format: %s", spa_format_to_str(data.format));
-  debug(1, "pw: samplesize: %d", spa_format_samplesize(data.format));
-  debug(1, "pw: stride: %d", data.stride);
-  if (data.rate != 0)
-    debug(1, "pw: latency: %d samples (%.3fs)", nom, (double)nom / data.rate);
+  pw_thread_loop_start(data.loop);
+  
+  char* appname = config.pw_application_name;
+  if (appname == NULL)
+    appname = "Shairport Sync";
+  
+  char* nodename = config.pw_node_name;
+  if (nodename == NULL)
+    nodename = "Shairport Sync";
 
-  info = SPA_AUDIO_INFO_RAW_INIT(.flags = SPA_AUDIO_FLAG_NONE, .format = data.format,
-                                 .rate = data.rate, .channels = data.channels);
-
-  params[0] = spa_format_audio_raw_build(&pod_builder, SPA_PARAM_EnumFormat, &info);
-
-  data.stream = pw_stream_new(data.core, "shairport-sync", data.props);
-
-  if (!data.stream) {
-    deinit();
-    die("pw: pw_stream_new() failed: %m");
+  props = pw_properties_new(PW_KEY_MEDIA_TYPE, "Audio", PW_KEY_MEDIA_CATEGORY, "Playback",
+                            PW_KEY_MEDIA_ROLE, "Music", PW_KEY_APP_NAME, appname,
+                            PW_KEY_NODE_NAME, nodename, NULL);
+  
+  if (config.pw_sink_target != NULL) {
+    debug(3, "setting sink target to \"%s\".", config.pw_sink_target);
+    pw_properties_set(props, PW_KEY_TARGET_OBJECT, config.pw_sink_target);
   }
 
-  debug(1, "pw: connecting stream: target_id=%" PRIu32 "", PW_ID_ANY);
+  data.stream = pw_stream_new_simple(pw_thread_loop_get_loop(data.loop), config.appName, props,
+                                     &stream_events, &data);
 
-  pw_stream_add_listener(data.stream, &data.stream_listener, &stream_events, &data);
+  // Make one parameter with the supported formats. The SPA_PARAM_EnumFormat
+  // id means that this is a format enumeration (of 1 value).
+  params[0] = spa_format_audio_raw_build(&b, SPA_PARAM_EnumFormat,
+                                         &SPA_AUDIO_INFO_RAW_INIT(.format = DEFAULT_FORMAT,
+                                                                  .channels = DEFAULT_CHANNELS,
+                                                                  .rate = DEFAULT_RATE));
 
-  ret = pw_stream_connect(
-      data.stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
-      PW_STREAM_FLAG_INACTIVE | PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS, params, 1);
-
-  if (ret < 0) {
-    deinit();
-    die("pw: pw_stream_connect() failed: %s", spa_strerror(ret));
-  }
-
-  const struct pw_properties *props;
-  void *pstate;
-  const char *key, *val;
-
-  if ((props = pw_stream_get_properties(data.stream)) != NULL) {
-    debug(1, "pw: stream properties:");
-    pstate = NULL;
-    while ((key = pw_properties_iterate(props, &pstate)) != NULL &&
-           (val = pw_properties_get(props, key)) != NULL) {
-      debug(1, "pw: \t%s = \"%s\"", key, val);
-    }
-  }
-
-  while (1) {
-    enum pw_stream_state stream_state = pw_stream_get_state(data.stream, NULL);
-    if (stream_state == PW_STREAM_STATE_PAUSED)
-      break;
-
-    struct timespec abstime;
-
-    pw_thread_loop_get_time(data.mainloop, &abstime, PW_TIMEOUT_NS);
-
-    ret = pw_thread_loop_timed_wait_full(data.mainloop, &abstime);
-    if (ret == -ETIMEDOUT) {
-      deinit();
-      die("pw: pw_thread_loop_timed_wait_full timed out: %s", strerror(ret));
-    }
-  }
-
-  pw_thread_loop_unlock(data.mainloop);
-
-  pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-}
-
-static void stop() {
-  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-  pw_thread_loop_lock(data.mainloop);
-
-  pw_stream_flush(data.stream, true);
-
-  pw_thread_loop_unlock(data.mainloop);
-  pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-}
-
-static void flush() {
-  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-  pw_thread_loop_lock(data.mainloop);
-
-  pw_stream_flush(data.stream, false);
-
-  pw_thread_loop_unlock(data.mainloop);
-  pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-}
-
-static int play(void *buf, int samples, __attribute__((unused)) int sample_type,
-                __attribute__((unused)) uint32_t timestamp,
-                __attribute__((unused)) uint64_t playtime) {
-  struct pw_buffer *pw_buffer = NULL;
-  struct spa_buffer *spa_buffer;
-  struct spa_data *spa_data;
-  int ret;
-
-  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL);
-  pw_thread_loop_lock(data.mainloop);
-
-  if (pw_stream_get_state(data.stream, NULL) == PW_STREAM_STATE_PAUSED)
-    pw_stream_set_active(data.stream, true);
-
-  while (pw_buffer == NULL) {
-    pw_buffer = pw_stream_dequeue_buffer(data.stream);
-    if (pw_buffer)
-      break;
-
-    struct timespec abstime;
-
-    pw_thread_loop_get_time(data.mainloop, &abstime, PW_TIMEOUT_NS);
-
-    ret = pw_thread_loop_timed_wait_full(data.mainloop, &abstime);
-    if (ret == -ETIMEDOUT) {
-      pw_thread_loop_unlock(data.mainloop);
-      pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-      return ret;
-    }
-  }
-
-  spa_buffer = pw_buffer->buffer;
-  spa_data = &spa_buffer->datas[0];
-
-  size_t bytes_to_copy = samples * data.stride;
-
-  debug(3, "pw: bytes_to_copy: %d", bytes_to_copy);
-
-  if (spa_data->maxsize < bytes_to_copy)
-    bytes_to_copy = spa_data->maxsize;
-
-  debug(3, "pw: spa_data->maxsize: %d", spa_data->maxsize);
-
-  memcpy(spa_data->data, buf, bytes_to_copy);
-
-  spa_data->chunk->offset = 0;
-  spa_data->chunk->stride = data.stride;
-  spa_data->chunk->size = bytes_to_copy;
-
-  pw_stream_queue_buffer(data.stream, pw_buffer);
-
-  pw_thread_loop_unlock(data.mainloop);
-
-  pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL);
-
+  // Now connect this stream. We ask that our process function is
+  // called in a realtime thread.
+  pw_stream_connect(data.stream, PW_DIRECTION_OUTPUT, PW_ID_ANY,
+                    PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS |
+                        PW_STREAM_FLAG_RT_PROCESS | PW_STREAM_FLAG_INACTIVE,
+                    params, 1);
+  stream_is_active = 0;
+  pw_thread_loop_unlock(data.loop);
   return 0;
+}
+
+static void start(__attribute__((unused)) int sample_rate,
+                  __attribute__((unused)) int sample_format) {
+}
+
+static void prepare_to_play() {
+  // debug(1, "prepare to play");
+  if (stream_is_active == 0) {
+    pw_thread_loop_lock(data.loop);
+    pw_stream_set_active(data.stream, true);
+    pw_thread_loop_unlock(data.loop);
+    stream_is_active = 1;
+    debug(3, "prepare to play activating stream");
+  }
+}
+
+static int play(__attribute__((unused)) void *buf, int samples,
+                __attribute__((unused)) int sample_type, __attribute__((unused)) uint32_t timestamp,
+                __attribute__((unused)) uint64_t playtime) {
+  if (stream_is_active == 0) {
+    pw_thread_loop_lock(data.loop);
+    pw_stream_set_active(data.stream, true);
+    pw_thread_loop_unlock(data.loop);
+    stream_is_active = 1;
+    debug(3, "set stream active");
+  }
+  // copy the samples into the queue
+  debug(3, "play %u samples; %u bytes already in the buffer.", samples, audio_occupancy);
+  size_t bytes_to_transfer = samples * DEFAULT_CHANNELS * DEFAULT_BYTES_PER_SAMPLE;
+  pthread_mutex_lock(&buffer_mutex);
+  size_t bytes_available = audio_size - audio_occupancy;
+  if (bytes_available < bytes_to_transfer)
+    bytes_to_transfer = bytes_available;
+  if (bytes_to_transfer > 0) {
+    size_t space_to_end_of_buffer = audio_umb - audio_eoq;
+    if (space_to_end_of_buffer >= bytes_to_transfer) {
+      memcpy(audio_eoq, buf, bytes_to_transfer);
+      audio_eoq += bytes_to_transfer;
+    } else {
+      memcpy(audio_eoq, buf, space_to_end_of_buffer);
+      buf += space_to_end_of_buffer;
+      memcpy(audio_lmb, buf, bytes_to_transfer - space_to_end_of_buffer);
+      audio_eoq = audio_lmb + bytes_to_transfer - space_to_end_of_buffer;
+    }
+    audio_occupancy += bytes_to_transfer;
+  }
+  pthread_mutex_unlock(&buffer_mutex);
+  return 0;
+}
+
+int delay(long *the_delay) {
+  long result = 0;
+  int reply = 0;
+  // find out what's already in the PipeWire system and when
+  struct timing_data timing_data;
+  int loop_count = 1;
+  do {
+    memcpy(&timing_data, (char *)&timing_data_1, sizeof(struct timing_data));
+    __sync_synchronize();
+    if (memcmp(&timing_data, (char *)&timing_data_2, sizeof(struct timing_data)) != 0) {
+      usleep(2); // microseconds
+      loop_count++;
+      __sync_synchronize();
+    }
+  } while ((memcmp(&timing_data, (char *)&timing_data_2, sizeof(struct timing_data)) != 0) &&
+           (loop_count < 10));
+  long total_delay_now_frames_long = 0;
+  if ((loop_count < 10) && (timing_data.pw_time_is_valid != 0)) {
+    struct timespec time_now;
+    clock_gettime(CLOCK_MONOTONIC, &time_now);
+    int64_t interval_from_process_time_to_now =
+        SPA_TIMESPEC_TO_NSEC(&time_now) - timing_data.time_info.now;
+    int64_t delay_in_ns = timing_data.time_info.delay + timing_data.time_info.buffered;
+    delay_in_ns = delay_in_ns * 1000000000;
+    delay_in_ns = delay_in_ns * timing_data.time_info.rate.num;
+    delay_in_ns = delay_in_ns / timing_data.time_info.rate.denom;
+
+    int64_t total_delay_now_ns = delay_in_ns - interval_from_process_time_to_now;
+    int64_t total_delay_now_frames = (total_delay_now_ns * DEFAULT_RATE) / 1000000000 + timing_data.frames;
+    total_delay_now_frames_long = total_delay_now_frames;
+    debug(3, "total delay in frames: %ld.", total_delay_now_frames_long);
+
+    if (timing_data.time_info.queued != 0) {
+      debug(1, "buffers queued: %d", timing_data.time_info.queued);
+    }
+    /*
+        debug(3,
+              "interval_from_process_time_to_now: %" PRId64 " ns, "
+              "delay_in_ns: %" PRId64 ", queued: %" PRId64 ", buffered: %" PRId64 ".",
+              // delay_timing_data.time_info.rate.num, delay_timing_data.time_info.rate.denom,
+              interval_from_process_time_to_now, delay_in_ns,
+              timing_data.time_info.queued, timing_data.time_info.buffered);
+    */
+
+  } else {
+    warn("Shairport Sync's PipeWire backend can not get timing information from the PipeWire "
+         "system. Is PipeWire running?");
+  }
+
+  pthread_mutex_lock(&buffer_mutex);
+  result = total_delay_now_frames_long + audio_occupancy / (DEFAULT_BYTES_PER_SAMPLE * DEFAULT_CHANNELS);
+  pthread_mutex_unlock(&buffer_mutex);
+  *the_delay = result;
+  return reply;
+}
+
+static void flush(void) {
+  pthread_mutex_lock(&buffer_mutex);
+  audio_toq = audio_eoq = audio_lmb;
+  audio_umb = audio_lmb + audio_size;
+  audio_occupancy = 0;
+  // if (enable_fill == 0) {
+  //   debug(1, "flush enable_fill");
+  // }
+  enable_fill = 1;
+  pthread_mutex_unlock(&buffer_mutex);
+}
+
+static void stop(void) {
+  pthread_mutex_lock(&buffer_mutex);
+  audio_toq = audio_eoq = audio_lmb;
+  audio_umb = audio_lmb + audio_size;
+  audio_occupancy = 0;
+  // if (enable_fill == 0) {
+  //   debug(1, "stop enable_fill");
+  // }
+  pthread_mutex_unlock(&buffer_mutex);
+  if (stream_is_active == 1) {
+    pw_thread_loop_lock(data.loop);
+    // pw_stream_flush(data.stream, true);
+    pw_stream_set_active(data.stream, false);
+    pw_thread_loop_unlock(data.loop);
+    stream_is_active = 0;
+    debug(3, "set stream inactive");
+  }
 }
 
 audio_output audio_pw = {.name = "pw",
@@ -519,9 +421,10 @@ audio_output audio_pw = {.name = "pw",
                          .stop = &stop,
                          .is_running = NULL,
                          .flush = &flush,
-                         .delay = NULL,
+                         .delay = &delay,
                          .stats = NULL,
                          .play = &play,
+                         .prepare_to_play = &prepare_to_play,
                          .volume = NULL,
                          .parameters = NULL,
                          .mute = NULL};

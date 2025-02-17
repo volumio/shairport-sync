@@ -24,6 +24,14 @@
     <property name="Version" type="s" access="read" />
     <property name="VersionString" type="s" access="read" />
     <property name="Protocol" type="s" access="read" />
+    <property name="ServiceName" type="s" access="read" />
+    <property name="OutputFormat" type="s" access="read" />
+    <property name="OutputRate" type="i" access="read" />
+    <property name="FirstFramePosition" type="s" access="read" />
+    <property name="FramePosition" type="s" access="read" />
+    <method name="SetFramePositionUpdateInterval">
+      <arg name="seconds" type="d" direction="in" />
+    </method>
   </interface>
   <interface name="org.gnome.ShairportSync.Diagnostics">
     <property name="Verbosity" type="i" access="readwrite" />
@@ -49,6 +57,8 @@
 		<property name='PlayerState' type='s' access='read'/>
 		<property name='ProgressString' type='s' access='read'/>
 		<property name='Client' type='s' access='read'/>
+		<property name='ClientName' type='s' access='read'/>
+		<property name='StreamType' type='s' access='read'/>
 		<property name='AirplayVolume' type='d' access='read'/>
     <method name="SetAirplayVolume">
       <arg name="volume" type="d" direction="in" />

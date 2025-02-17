@@ -208,10 +208,8 @@ static void flush(void) {
   debug(1, "libsoundio output flushed\n");
 }
 
-static void help(void) { printf(" There are no options for libsoundio.\n"); }
-
 audio_output audio_soundio = {.name = "soundio",
-                              .help = &help,
+                              .help = NULL,
                               .init = &init,
                               .deinit = &deinit,
                               .prepare = NULL,

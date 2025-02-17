@@ -31,6 +31,7 @@ typedef struct {
   int (*init)(int argc, char **argv);
   // at end of program
   void (*deinit)(void);
+  void (*prepare_to_play)(void); // sent when audio is received for the first time -- advance warning.
 
   int (*prepare)(void); // looks and sets stuff in the config data structure
 

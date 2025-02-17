@@ -13,16 +13,10 @@ If you are using the default ALSA backend, don't forget to check two simple thin
 1. Check that the volume on the output device is turned up. If the output device has a "mixer" i.e. a volume control, Shairport Sync does not, by default, try to control it. Therefore, if it happens to be very low or even at zero, you might not hear audio that is actually coming through to the device. (You can get Shairport Sync to control a mixer -- see [here](https://github.com/mikebrady/spsdoc/blob/main/ADVANCED%20TOPICS/InitialConfiguration.md) for some hints.)
 2. Check that the output device is not muted. Some audio applications (including very old versions of Shairport Sync) leave the output device mixer in a muted state after use to minimise the possibility of noise. However, this is not generally compatible with other audio players using the same device, as they generally expect the device to be unmuted. 
 
-You can use `alsamixer` for both of theses checks. A muted output has the letter(s) `M` as its value. Select it and type `M` again to unmute. 
+You can use `alsamixer` for both of these checks. A muted output has the letter(s) `M` as its value. Select it and type `M` again to unmute. 
 
-### Audio is Delayed!
-If the audio from your Shairport Sync device is delayed slightly by comparison with audio from other devices, it may be that the output device being fed by Shairport Sync is introducing a delay while it processes the audio. If your output device include any digital processing component, it probably delays the audio while it processing occurs. 
-
-For instance, if your output device is a HDMI-connected device such as a TV or an AV Receiver, it will almost certainly delay audio by anything up to several hundred milliseconds.
-
-The fix for this is to ask Shairport Sync to provide the audio to the output device _slightly ahead of time_, so that by the time the output device has processed it, the audio emerges at exactly the right time. The setting to look for is in the `general` section of the Shairport Sync configuration file and is called `audio_backend_latency_offset_in_seconds`. By default it is `0.0` seconds.
-
-For example, if your output device is delaying audio by 100 milliseconds (0.1 seconds), set the `audio_backend_latency_offset_in_seconds` to `-0.1`, so that audio is provided to your output device 0.1 seconds early. Remember to uncomment the line by removing the initial `//` and then restart Shairport Sync (or reboot the device) for the changed setting to take effect.
+### Sync is slightly off!
+Please see [Adjusting Sync](./ADVANCED%20TOPICS/AdjustingSync.md).
 
 ### WiFi adapter running in power-saving / low-power mode
 
@@ -72,7 +66,10 @@ There are some more details in some the closed issues on this repository.
 
 ### VPNs
 
-To see the AirPlay service Shairport Sync provides, your devices must be on the same subnet as Shairport Sync. If, say, a device such as an iPhone is on a VPN and Shairport Sync is not, or vice-versa, then even though the devices might be physically on the same network, they are effectively on separate networks due to the VPN and the AirPlay service will not be accessible to the device. So, when you are troubleshooting, look out for VPN issues. 
+To see the AirPlay service Shairport Sync provides, your devices must be on the same subnet as Shairport Sync. If, say, a device such as an iPhone is on a VPN and Shairport Sync is not, or vice-versa, then even though the devices might be physically on the same network, they are effectively on separate networks due to the VPN and the AirPlay service will not be accessible to the device. So, when you are troubleshooting, look out for VPN issues.
+
+### Ubiquiti Routers
+Ubiquiti router settings occasionally cause services that use Boujour/Zeroconf -- including Shairport Sync -- not to appear on the network. (AirPrint is another example of a service that can be affected by this problem.) [This link](https://community.ui.com/questions/Issues-with-Bonjour-on-UDM-Pro/6db37e3f-73cf-4aaf-8dba-8a196fd0e2b1) to a Ubiquiti community discussion might be helpful.
 
 ### Faulty WiFi
 For an example of what it can take to track down a bad WiFi situation – in this case, a faulty WiFi adapter – please look at [this report](https://github.com/mikebrady/shairport-sync/issues/689).

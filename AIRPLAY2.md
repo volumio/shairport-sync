@@ -1,5 +1,9 @@
 # AirPlay 2
-Shairport Sync offers AirPlay 2 support for audio sources on iOS devices, Macs from macOS 10.15 (Catalina) onwards, HomePod minis and Apple TVs.
+**Shairport Sync** (as of [v4.1](https://github.com/mikebrady/shairport-sync/releases/tag/4.1) and newer) offers **AirPlay 2** support for audio sources on:
+- iOS devices,
+- Macs from macOS 10.15 (Catalina) onwards,
+- HomePod minis,
+- and Apple TVs.
 
 ## What Works
 - AirPlay 2 audio for iOS, HomePod mini, AppleTV and Mac players.
@@ -18,7 +22,7 @@ Shairport Sync offers AirPlay 2 support for audio sources on iOS devices, Macs f
 
 ## General
 Shairport Sync uses a companion application called [NQPTP](https://github.com/mikebrady/nqptp) ("Not Quite PTP")
-for timing and synchronisation in AirPlay 2. NQPTP must run as `root` and must have exclusive access to ports `319` and `320`.
+for timing and synchronisation in AirPlay 2. NQPTP must have exclusive access to ports `319` and `320`.
 
 Lossless and High Definition Lossless material is transcoded to AAC before it reaches Shairport Sync. 
 
@@ -26,12 +30,12 @@ Lossless and High Definition Lossless material is transcoded to AAC before it re
 AirPlay 2 support needs a slightly more powerful CPU for decoding and synchronisation and more memory for bigger buffers and larger libraries. A system with the power of a Raspberry Pi 2 or Raspberry Pi Zero 2 W, or better, is recommended.
 
 Here are some guidelines: 
-* Full access, including `root` privileges, to a system at least as powerful as a Raspberry Pi 2 or a Raspberry Pi Zero 2 W.
+* Full access, including network capabilities or `root` privileges, to a system at least as powerful as a Raspberry Pi 2 or a Raspberry Pi Zero 2 W.
 * Ports 319 and 320 must be free to use (i.e. they must not be in use by another service such as a PTP service) and must not be blocked by a firewall.
-* An up-to-date Linux or FreeBSD. This is important, as some of the libraries must be the latest available.
+* An up-to-date system. This is important, as some of the libraries must be the latest available.
 * Shairport Sync will not run in AirPlay 2 mode on a Mac because NQPTP, on which it relies, needs ports 319 and 320, which are already used by macOS.
 * A version of the [FFmpeg](https://www.ffmpeg.org) library with an AAC decoder capable of decoding Floating Planar -- `fltp` -- material. There is a guide [here](TROUBLESHOOTING.md#aac-decoder-issues-airplay-2-only) to help you find out if your system has it.
-* An audio output, for example an ALSA device (or `sndio` in FreeBSD). The device must be capable of running at 44,100 frames per second. You can use an `sps-alsa-explore`](https://github.com/mikebrady/sps-alsa-explore) to test the suitability of hardware ALSA audio devices on your device.
+* An audio output. The device must be capable of running at 44,100 frames per second. You can use [`sps-alsa-explore`](https://github.com/mikebrady/sps-alsa-explore) to test the suitability of hardware ALSA audio devices on your device.
 Other backends continue to work as with "classic" Shairport Sync.
 - Multiple instances of the AirPlay 2 version of Shairport Sync can not be hosted on the same system. It seems that AirPlay 2 clients are confused by having multiple AirPlay 2 players at the same IP addresses.
 

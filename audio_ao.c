@@ -69,6 +69,8 @@ static void help(void) {
 }
 
 static int init(int argc, char **argv) {
+  int oldState;
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &oldState); // make this un-cancellable
   ao_initialize();
   driver = ao_default_driver_id();
   if (driver == -1) {
@@ -131,15 +133,20 @@ static int init(int argc, char **argv) {
     fmt.rate = 44100;
     fmt.channels = 2;
     fmt.byte_format = AO_FMT_NATIVE;
+    fmt.matrix = strdup("L,R");
   }
+  pthread_setcancelstate(oldState, NULL);
   return 0;
 }
 
 static void deinit(void) {
+  int oldState;
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &oldState); // make this un-cancellable
   if (dev != NULL)
     ao_close(dev);
   dev = NULL;
   ao_shutdown();
+  pthread_setcancelstate(oldState, NULL);
 }
 
 static void start(__attribute__((unused)) int sample_rate,
@@ -165,10 +172,13 @@ static int play(void *buf, int samples, __attribute__((unused)) int sample_type,
 
 static void stop(void) {
   // debug(1,"libao stop");
+  int oldState;
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &oldState); // make this un-cancellable
   if (dev != NULL) {
     ao_close(dev);
     dev = NULL;
   }
+  pthread_setcancelstate(oldState, NULL);
 }
 
 audio_output audio_ao = {.name = "ao",

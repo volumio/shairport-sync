@@ -411,19 +411,17 @@ void set_dacp_server_information(rtsp_conn_info *conn) {
     debug(2, "set_dacp_server_information set IP to \"%s\" and DACP id to \"%s\".",
           dacp_server.ip_string, dacp_server.dacp_id);
 
-    // If the client is forked-daapd, then we always use revision number 1
-    // because otherwise the return read will hang in a "long poll" if there
-    // are no changes.
-    // This is different to other AirPlay clients
-    // which return immediately with a 403 code if there are no changes.
-    dacp_server.always_use_revision_number_1 = 0;
-    if (conn->UserAgent != NULL) {
-      char *p = strstr(conn->UserAgent, "forked-daapd");
-      if ((p != 0) &&
-          (p == conn->UserAgent)) { // must exist and be at the start of the UserAgent string
-        dacp_server.always_use_revision_number_1 = 1;
-      }
-    }
+    /*
+
+    "long polling" is not implemented by Shairport Sync, whereby by sending the client the
+    last-received revision number, the link will hang until a change occurs.
+
+    Instead, at present, Shairport Sync always uses a revision number of 1.
+
+    */
+
+    // always use revision number 1
+    dacp_server.always_use_revision_number_1 = 1;
 
     metadata_hub_modify_prolog();
     int ch = metadata_store.dacp_server_active != dacp_server.scan_enable;
@@ -653,7 +651,7 @@ void *dacp_monitor_thread_code(__attribute__((unused)) void *na) {
         char *response = NULL;
         int32_t item_size;
         char command[1024] = "";
-        if (always_use_revision_number_1 != 0) // for forked-daapd
+        if (always_use_revision_number_1 != 0) // see the "long polling" note above
           revision_number = 1;
         snprintf(command, sizeof(command) - 1, "playstatusupdate?revision-number=%d",
                  revision_number);
@@ -803,8 +801,9 @@ void *dacp_monitor_thread_code(__attribute__((unused)) void *na) {
                 case 'canp': // nowplaying 4 ids: dbid, plid, playlistItem, itemid (from mellowware
                              // see reference above)
                   debug(2, "DACP Composite ID seen");
-                  if (memcmp(metadata_store.item_composite_id, sp - item_size,
-                             sizeof(metadata_store.item_composite_id)) != 0) {
+                  if ((metadata_store.item_composite_id_is_valid == 0) ||
+                      (memcmp(metadata_store.item_composite_id, sp - item_size,
+                              sizeof(metadata_store.item_composite_id)) != 0)) {
                     memcpy(metadata_store.item_composite_id, sp - item_size,
                            sizeof(metadata_store.item_composite_id));
                     char st[33];
@@ -817,6 +816,7 @@ void *dacp_monitor_thread_code(__attribute__((unused)) void *na) {
                     *pt = 0;
                     debug(2, "Item composite ID changed to 0x%s.", st);
                     metadata_store.item_composite_id_changed = 1;
+                    metadata_store.item_composite_id_is_valid = 1;
                   }
                   break;
                 case 'astm':
@@ -826,6 +826,7 @@ void *dacp_monitor_thread_code(__attribute__((unused)) void *na) {
                   if (ui != metadata_store.songtime_in_milliseconds) {
                     metadata_store.songtime_in_milliseconds = ui;
                     metadata_store.songtime_in_milliseconds_changed = 1;
+                    metadata_store.songtime_in_milliseconds_is_valid = 1;
                     debug(2, "DACP Song Time set to: \"%u\"",
                           metadata_store.songtime_in_milliseconds);
                   }
@@ -1219,8 +1220,8 @@ int dacp_get_volume(int32_t *the_actual_volume) {
     http_response = dacp_get_speaker_list((dacp_spkr_stuff *)&speaker_info, 50, &speaker_count);
     if (http_response == 200) {
       // get our machine number
-      uint16_t *hn = (uint16_t *)config.hw_addr;
-      uint32_t *ln = (uint32_t *)(config.hw_addr + 2);
+      uint16_t *hn = (uint16_t *)config.ap1_prefix;
+      uint32_t *ln = (uint32_t *)(config.ap1_prefix + 2);
       uint64_t t1 = ntohs(*hn);
       uint64_t t2 = ntohl(*ln);
       int64_t machine_number = (t1 << 32) + t2; // this form is useful
@@ -1273,8 +1274,8 @@ int dacp_set_volume(int32_t vo) {
       http_response = dacp_get_speaker_list((dacp_spkr_stuff *)&speaker_info, 50, &speaker_count);
       if (http_response == 200) {
         // get our machine number
-        uint16_t *hn = (uint16_t *)config.hw_addr;
-        uint32_t *ln = (uint32_t *)(config.hw_addr + 2);
+        uint16_t *hn = (uint16_t *)config.ap1_prefix;
+        uint32_t *ln = (uint32_t *)(config.ap1_prefix + 2);
         uint64_t t1 = ntohs(*hn);
         uint64_t t2 = ntohl(*ln);
         int64_t machine_number = (t1 << 32) + t2; // this form is useful

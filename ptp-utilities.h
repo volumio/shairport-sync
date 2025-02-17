@@ -1,6 +1,6 @@
 /*
  * This file is part of Shairport Sync.
- * Copyright (c) Mike Brady 2020 -- 2021
+ * Copyright (c) Mike Brady 2020 -- 2023
  * All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person
@@ -37,6 +37,7 @@ void ptp_send_control_message_string(const char *msg);
 
 void ptp_shm_interface_init();
 int ptp_shm_interface_open();
+int ptp_get_clock_version();
 int ptp_shm_interface_close();
 
 #endif /* __PTP_UTILITIES_H */

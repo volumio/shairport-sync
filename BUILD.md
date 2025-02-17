@@ -23,8 +23,9 @@ Do this until no more copies of `shairport-sync` are found.
 You should also remove any of the following service files that may be present:
 * `/etc/systemd/system/shairport-sync.service`
 * `/etc/systemd/user/shairport-sync.service`
+* `/lib/systemd/system/shairport-sync.service`
 * `/lib/systemd/user/shairport-sync.service`
-*  `/etc/init.d/shairport-sync`
+* `/etc/init.d/shairport-sync`
 
 New service files will be installed if necessary at the `# make install` stage.
 #### Reboot after Cleaning Up
@@ -37,7 +38,7 @@ Okay, now let's get the tools and libraries for building and installing Shairpor
 ```
 # apt update
 # apt upgrade # this is optional but recommended
-# apt install --no-install-recommends build-essential git xmltoman autoconf automake libtool \
+# apt install --no-install-recommends build-essential git autoconf automake libtool \
     libpopt-dev libconfig-dev libasound2-dev avahi-daemon libavahi-client-dev libssl-dev libsoxr-dev \
     libplist-dev libsodium-dev libavutil-dev libavcodec-dev libavformat-dev uuid-dev libgcrypt-dev xxd
 ```
@@ -45,23 +46,23 @@ If you are building classic Shairport Sync, the list of packages is shorter:
 ```
 # apt update
 # apt upgrade # this is optional but recommended
-# apt-get install --no-install-recommends build-essential git xmltoman autoconf automake libtool \
+# apt-get install --no-install-recommends build-essential git autoconf automake libtool \
     libpopt-dev libconfig-dev libasound2-dev avahi-daemon libavahi-client-dev libssl-dev libsoxr-dev
 ```
-### Fedora
-For AirPlay 2 operation, _before you install the libraries_, please ensure the you have [enabled](https://docs.fedoraproject.org/en-US/quick-docs/setup_rpmfusion) RPM Fusion software repositories at least to the "Free" level. If this is not done, FFmpeg libraries will be installed that lack a suitable AAC decoder, preventing Shairport Sync from working in AirPlay 2 mode.
+### Fedora (Fedora 40)
+For AirPlay 2 operation, _before you install the libraries_, please ensure the you have [enabled](https://docs.fedoraproject.org/en-US/quick-docs/rpmfusion-setup) RPM Fusion software repositories to the "Nonfree" level. If this is not done, the FFmpeg libraries will lack a suitable AAC decoder, preventing Shairport Sync from working in AirPlay 2 mode. 
 ```
 # yum update
-# yum install make automake gcc gcc-c++ \
-    git xmltoman autoconf automake avahi-devel libconfig-devel openssl-devel popt-devel soxr-devel \
-    ffmpeg ffmpeg-devel libplist-devel libsodium-devel libgcrypt-dev libuuid-devel vim-common \
+# yum install --allowerasing make automake gcc gcc-c++ \
+    git autoconf automake avahi-devel libconfig-devel openssl-devel popt-devel soxr-devel \
+    ffmpeg ffmpeg-devel libplist-devel libsodium-devel libgcrypt-devel libuuid-devel vim-common \
     alsa-lib-devel
 ```
 If you are building classic Shairport Sync, the list of packages is shorter:
 ```
 # yum update
 # yum install make automake gcc gcc-c++ \
-    git xmltoman autoconf automake avahi-devel libconfig-devel openssl-devel popt-devel soxr-devel \
+    git autoconf automake avahi-devel libconfig-devel openssl-devel popt-devel soxr-devel \
     alsa-lib-devel
 ```
 ### Arch Linux
@@ -106,12 +107,12 @@ Reboot for these changes to take effect.
 
 Next, install the packages that are needed for Shairport Sync and NQPTP:
 ```
-# pkg install git autotools pkgconf popt libconfig openssl alsa-utils \
+# pkg install git autotools pkgconf popt libconfig openssl alsa-utils libsoxr \
       libplist libsodium ffmpeg e2fsprogs-libuuid vim
 ```
 If you are building classic Shairport Sync, the list of packages is shorter:
 ```
-# pkg install git autotools pkgconf popt libconfig openssl alsa-utils
+# pkg install git autotools pkgconf popt libconfig openssl alsa-utils libsoxr
 ```
 ## 3. Build
 ### NQPTP
@@ -121,7 +122,7 @@ Download, install, enable and start NQPTP from [here](https://github.com/mikebra
 
 ### Shairport Sync
 #### Build and Install
-Download Shairport Sync, configure, compile and install it. Before executing the commands, please note the following:
+Download Shairport Sync, branch and configure, compile and install it. Before executing the commands, please note the following:
 
 * If building for FreeBSD, replace `--with-systemd` with `--with-os=freebsd --with-freebsd-service`.
 * Omit the `--with-airplay-2` from the `./configure` options if you are building classic Shairport Sync.
@@ -153,7 +154,8 @@ If you have problems, please check the items in Final Notes below, or in the [TR
 Note: Shairport Sync will run indefinitely -- use Control-C it to stop it.
 
 ## 5. Enable and Start Service
-Once you are happy that Shairport Sync runs from the command line, you should Control-C out of it and enable and start the `shairport-sync` service. This will launch Shairport Sync automatically as a background "daemon" service when the system powers up:
+If your system has a Graphical User Interface (GUI) it probably uses PulseAudio or PipeWire for audio services. If that is the case, please review [Working with PulseAudio or PipeWire](https://github.com/mikebrady/shairport-sync/blob/master/ADVANCED%20TOPICS/PulseAudioAndPipeWire.md).
+Otherwise, once you are happy that Shairport Sync runs from the command line, you should enable and start the `shairport-sync` service. This will launch Shairport Sync automatically as a background "daemon" service when the system powers up:
 
 ### Linux
 ```
@@ -193,4 +195,4 @@ With AirPlay 2, you can follow the steps in [ADDINGTOHOME.md](ADDINGTOHOME.md) t
 ### Wait, there's more...
 Instead of using default values for everything, you can use the configuration file to get finer control over the setup, particularly the output device and mixer control -- see [Finish Setting Up](ADVANCED%20TOPICS/InitialConfiguration.md).
 
-Please take a look at [Advanced Topics](ADVANCED%20TOPICS/README.md) for some ideas about what else you can do to enhance the operation of Shairport Sync.
+Please take a look at [Advanced Topics](ADVANCED%20TOPICS/README.md) for some ideas about what else you can do to enhance the operation of Shairport Sync. For example, you can adjust synchronisation to compensate for delays in your system.

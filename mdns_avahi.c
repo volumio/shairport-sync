@@ -206,7 +206,7 @@ static void egroup_callback(AvahiEntryGroup *g, AvahiEntryGroupState state,
 
     debug(2, "avahi: service name collision, renaming service to '%s'", service_name);
 
-    /* And recreate the services */
+    /* And try to recreate the services */
     register_service(avahi_entry_group_get_client(g));
     break;
   }
@@ -228,6 +228,15 @@ static void egroup_callback(AvahiEntryGroup *g, AvahiEntryGroupState state,
     debug(1, "avahi: unhandled egroup state: %d", state);
     break;
   }
+}
+
+static int deregister_service(AVAHI_GCC_UNUSED AvahiClient *c) {
+  int response = 0;
+  if (group != NULL) {
+    response = avahi_entry_group_free(group);
+    group = NULL;
+  }
+  return response;
 }
 
 static void register_service(AvahiClient *c) {
@@ -293,21 +302,26 @@ static void client_callback(AvahiClient *c, AvahiClientState state,
 
   case AVAHI_CLIENT_FAILURE:
     err = avahi_client_errno(c);
-    debug(1, "avahi: client failure: %s", avahi_strerror(err));
-
     if (err == AVAHI_ERR_DISCONNECTED) {
-      debug(1, "avahi client -- we have been disconnected, so let's reconnect.");
-      /* We have been disconnected, so lets reconnect */
-      if (c)
-        avahi_client_free(c);
-      else
-        debug(1, "Attempt to free NULL avahi client");
-      c = NULL;
-      group = NULL;
-
+      debug(1, "avahi client disconnected -- reconnection attempted.");
+      if (c) {
+        // it seems that the avahi_threaded_poll thread is still running and locked here
+        deregister_service(c); // delete the group
+        dacp_browser_struct *dbs = &private_dbs;
+        if (dbs->service_browser) {
+          int rc = avahi_service_browser_free(dbs->service_browser); // delete the service browser
+          if (rc != 0)
+            debug(1,
+                  "Error %d freeing the Avahi service browser after the Avahi client has been "
+                  "disconnected.",
+                  rc);
+          dbs->service_browser = NULL;
+        }
+        avahi_client_free(c); // delete the client
+      }
       if (!(client = avahi_client_new(avahi_threaded_poll_get(tpoll), AVAHI_CLIENT_NO_FAIL,
                                       client_callback, userdata, &err))) {
-        warn("avahi: failed to create client object: %s", avahi_strerror(err));
+        warn("avahi: failed to create a replacement client object: %s", avahi_strerror(err));
         avahi_threaded_poll_quit(tpoll);
       }
     } else {

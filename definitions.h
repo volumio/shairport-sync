@@ -30,6 +30,10 @@
 #define COMPILE_FOR_FREEBSD 1
 #endif
 
+#if defined(__OpenBSD__)
+#define COMPILE_FOR_OPENBSD 1
+#endif
+
 // struct sockaddr_in6 is bigger than struct sockaddr. derp
 #ifdef AF_INET6
 #define SOCKADDR struct sockaddr_storage

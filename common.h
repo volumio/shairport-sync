@@ -37,7 +37,8 @@ typedef enum {
 typedef enum {
   TOE_normal,
   TOE_emergency,
-  TOE_dbus // a dbus request was made -- don't wait for the dbus thread to exit
+  TOE_dbus // a request was made on a D-Bus interface (the native D-Bus or MPRIS interfaces)-- don't
+           // wait for the dbus thread to exit
 } type_of_exit_type;
 
 #define sps_extra_code_output_stalled 32768
@@ -72,6 +73,7 @@ typedef enum {
 typedef enum {
   VCP_standard = 0,
   VCP_flat,
+  VCP_dasl_tapered,
 } volume_control_profile_type;
 
 typedef enum {
@@ -121,7 +123,14 @@ typedef struct {
   config_t *cfg;
   int endianness;
   double airplay_volume; // stored here for reloading when necessary
-  char *appName;         // normally the app is called shairport-syn, but it may be symlinked
+  double default_airplay_volume;
+  double high_threshold_airplay_volume;
+  uint64_t last_access_to_volume_info_time;
+  int limit_to_high_volume_threshold_time_in_minutes; // revert to the high threshold volume level
+                                                      // if the existing volume level exceeds this
+                                                      // and hasn't been used for this amount of
+                                                      // time (0 means never revert)
+  char *appName; // normally the app is called shairport-syn, but it may be symlinked
   char *password;
   char *service_name; // the name for the shairport service, e.g. "Shairport Sync Version %v running
                       // on host %h"
@@ -130,9 +139,17 @@ typedef struct {
   char *pa_server;           // the pulseaudio server address that Shairport Sync will play on.
   char *pa_application_name; // the name under which Shairport Sync shows up as an "Application" in
                              // the Sound Preferences in most desktop Linuxes.
-  // Defaults to "Shairport Sync". Shairport Sync must be playing to see it.
+  // Defaults to "Shairport Sync".
 
   char *pa_sink; // the name (or id) of the sink that Shairport Sync will play on.
+#endif
+#ifdef CONFIG_PW
+  char *pw_application_name;  // the name under which Shairport Sync shows up as an "Application" in
+                              // the Sound Preferences in most desktop Linuxes.
+                              // Defaults to "Shairport Sync".
+
+  char *pw_node_name; // defaults to the application's name, usually "shairport-sync".
+  char *pw_sink_target; // leave this unset if you don't want to change the sink_target.
 #endif
 #ifdef CONFIG_METADATA
   int metadata_enabled;
@@ -141,6 +158,7 @@ typedef struct {
   int metadata_sockport;
   size_t metadata_sockmsglength;
   int get_coverart;
+  double metadata_progress_interval; // 0 means no progress reports
 #endif
 #ifdef CONFIG_MQTT
   int mqtt_enabled;
@@ -157,8 +175,11 @@ typedef struct {
   int mqtt_publish_parsed;
   int mqtt_publish_cover;
   int mqtt_enable_remote;
+  int mqtt_enable_autodiscovery;
+  char *mqtt_autodiscovery_prefix;
   char *mqtt_empty_payload_substitute;
 #endif
+  uint8_t ap1_prefix[6];
   uint8_t hw_addr[8]; // only needs 6 but 8 is handy when converting this to a number
   int port;
   int udp_port_base;
@@ -166,11 +187,12 @@ typedef struct {
   int ignore_volume_control;
   int volume_max_db_set; // set to 1 if a maximum volume db has been set
   int volume_max_db;
-  int no_sync;            // disable synchronisation, even if it's available
-  int no_mmap;            // disable use of mmap-based output, even if it's available
-  double resyncthreshold; // if it get's out of whack my more than this number of seconds, resync.
-                          // Zero means never
-                          // resync.
+  int no_sync;                 // disable synchronisation, even if it's available
+  int no_mmap;                 // disable use of mmap-based output, even if it's available
+  double resync_threshold;     // if it gets out of whack by more than this number of seconds, do a
+                               // resync. if zero, never do a resync.
+  double resync_recovery_time; // if sync is late, drop the delay but also drop the following frames
+                               // up to the resync_recovery_time
   int allow_session_interruption;
   int timeout; // while in play mode, exit if no packets of audio come in for more than this number
                // of seconds . Zero means never exit.
@@ -311,11 +333,8 @@ typedef struct {
   char *airplay_pi;        // UUID in the Bonjour advertisement and the GETINFO Plist
   char *nqptp_shared_memory_interface_name; // client name for nqptp service
 #endif
+  int unfixable_error_reported; // only report once.
 } shairport_cfg;
-
-// accessors to config for multi-thread access
-double get_config_airplay_volume();
-void set_config_airplay_volume(double v);
 
 uint32_t nctohl(const uint8_t *p);  // read 4 characters from *p and do ntohl on them
 uint16_t nctohs(const uint8_t *p);  // read 2 characters from *p and do ntohs on them
@@ -365,11 +384,14 @@ void _die(const char *filename, const int linenumber, const char *format, ...);
 void _warn(const char *filename, const int linenumber, const char *format, ...);
 void _inform(const char *filename, const int linenumber, const char *format, ...);
 void _debug(const char *filename, const int linenumber, int level, const char *format, ...);
+void _debug_print_buffer(const char *thefilename, const int linenumber, int level, void *buf,
+                         size_t buf_len);
 
 #define die(...) _die(__FILE__, __LINE__, __VA_ARGS__)
 #define debug(...) _debug(__FILE__, __LINE__, __VA_ARGS__)
 #define warn(...) _warn(__FILE__, __LINE__, __VA_ARGS__)
 #define inform(...) _inform(__FILE__, __LINE__, __VA_ARGS__)
+#define debug_print_buffer(...) _debug_print_buffer(__FILE__, __LINE__, __VA_ARGS__)
 
 uint8_t *base64_dec(char *input, int *outlen);
 char *base64_enc(uint8_t *input, int length);
@@ -379,9 +401,17 @@ char *base64_enc(uint8_t *input, int length);
 uint8_t *rsa_apply(uint8_t *input, int inlen, int *outlen, int mode);
 
 // given a volume (0 to -30) and high and low attenuations in dB*100 (e.g. 0 to -6000 for 0 to -60
-// dB), return an attenuation depending on a linear interpolation along along the range
+// dB), return an attenuation depending on a linear interpolation along the range
 double flat_vol2attn(double vol, long max_db, long min_db);
 
+// The intention behind dasl_tapered is that a given percentage change in volume should result in
+// the same percentage change in perceived loudness. For instance, doubling the volume level should
+// result in doubling the perceived loudness. With the range of AirPlay volume being from -30 to 0,
+// doubling the volume from -22.5 to -15 results in an increase of 10 dB. Similarly, doubling the
+// volume from -15 to 0 results in an increase of 10 dB. For compatibility with mixers having a
+// restricted attenuation range (e.g. 30 dB), "dasl_tapered" will switch to a flat profile at low
+// AirPlay volumes.
+double dasl_tapered_vol2attn(double vol, long max_db, long min_db);
 // given a volume (0 to -30) and high and low attenuations in dB*100 (e.g. 0 to -6000 for 0 to -60
 // dB), return an attenuation depending on the transfer function
 double vol2attn(double vol, long max_db, long min_db);
@@ -400,9 +430,6 @@ extern uint64_t ns_time_at_startup, ns_time_at_last_debug_message;
 // this is for reading an unsigned 32 bit number, such as an RTP timestamp
 
 uint32_t uatoi(const char *nptr);
-
-// this is for allowing us to cancel the whole program
-extern pthread_t main_thread_id;
 
 extern shairport_cfg config;
 extern config_t config_file_stuff;
@@ -481,6 +508,7 @@ uint16_t bind_UDP_port(int ip_family, const char *self_ip_address, uint32_t scop
 
 void socket_cleanup(void *arg);
 void mutex_unlock(void *arg);
+void rwlock_unlock(void *arg);
 void mutex_cleanup(void *arg);
 void cv_cleanup(void *arg);
 void thread_cleanup(void *arg);

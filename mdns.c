@@ -69,7 +69,7 @@ void mdns_register(char **txt_records, char **secondary_txt_records) {
   char *p = ap1_service_name;
   int i;
   for (i = 0; i < 6; i++) {
-    snprintf(p, 3, "%02X", config.hw_addr[i]);
+    snprintf(p, 3, "%02X", config.ap1_prefix[i]);
     p += 2;
   }
   *p++ = '@';

@@ -1,6 +1,6 @@
 /*
  * jack output driver. This file is part of Shairport Sync.
- * Copyright (c) 2019 -- 2022 Mike Brady <4265913+mikebrady@users.noreply.github.com>,
+ * Copyright (c) 2019 -- 2024 Mike Brady <4265913+mikebrady@users.noreply.github.com>,
  *                    Jörn Nettingsmeier <nettings@luchtbeweging.nl>
  *
  * All rights reserved.
@@ -50,8 +50,11 @@ pthread_mutex_t client_mutex = PTHREAD_MUTEX_INITIALIZER;
 jack_port_t *port[NPORTS];
 const char *port_name[NPORTS] = {"out_L", "out_R"};
 
+
+int sps_sample_rate;
+
 jack_client_t *client;
-jack_nframes_t sample_rate;
+jack_nframes_t jack_sample_rate;
 jack_nframes_t jack_latency;
 
 jack_ringbuffer_t *jackbuf;
@@ -85,12 +88,7 @@ soxr_io_spec_t io_spec;
 #endif
 
 static inline sample_t sample_conv(short sample) {
-  // It sounds correct, but I don't understand it.
-  // Zero int needs to be zero float. Check.
-  // Plus 32767 int is 1.0. Check.
-  // Minus 32767 int is -0.99997. And here my brain shuts down.
-  // In my head, it should be 1.0, and we should tolerate an overflow
-  // at minus 32768. But I'm sure there's a textbook explanation somewhere.
+  // signed 16-bit int to float
   return ((sample < 0) ? (-1.0 * sample / SHRT_MIN) : (1.0 * sample / SHRT_MAX));
 }
 
@@ -235,17 +233,17 @@ static int jack_init(__attribute__((unused)) int argc, __attribute__((unused)) c
   if (!client) {
     die("Could not start JACK server. JackStatus is %x", status);
   }
-  sample_rate = jack_get_sample_rate(client);
+  jack_sample_rate = jack_get_sample_rate(client);
 #ifdef CONFIG_SOXR
   if (config.jack_soxr_resample_quality >= SOXR_QQ) {
     quality_spec = soxr_quality_spec(config.jack_soxr_resample_quality, 0);
     io_spec = soxr_io_spec(SOXR_INT16_I, SOXR_FLOAT32_I);
   } else
 #endif
-      if (sample_rate != 44100) {
+      if (jack_sample_rate != 44100) {
     die("The JACK server is running at the wrong sample rate (%d) for Shairport Sync."
         " Must be 44100 Hz.",
-        sample_rate);
+        jack_sample_rate);
   }
   jack_set_process_callback(client, &process, NULL);
   jack_set_graph_order_callback(client, &graph, NULL);
@@ -298,7 +296,8 @@ static int jack_init(__attribute__((unused)) int argc, __attribute__((unused)) c
       }
       while (port_list[i++] != NULL) {
         inform(
-            "Additional matching port %s found. Check that the connections are what you intended.");
+            "Additional matching port %s found. Check that the connections are what you intended.",
+            port_list[i - 1]);
       }
       jack_free(port_list);
     }
@@ -328,6 +327,7 @@ static void jack_start(int i_sample_rate, __attribute__((unused)) int i_sample_f
   // Nothing to do, JACK client has already been set up at jack_init().
   // Also, we have no say over the sample rate or sample format of JACK,
   // We convert the 16bit samples to float, and die if the sample rate is != 44k1 without soxr.
+  sps_sample_rate = i_sample_rate;
 #ifdef CONFIG_SOXR
   if (config.jack_soxr_resample_quality >= SOXR_QQ) {
     // we might improve a bit with soxr_clear if the sample_rate doesn't change
@@ -335,7 +335,7 @@ static void jack_start(int i_sample_rate, __attribute__((unused)) int i_sample_f
       soxr_delete(soxr);
     }
     soxr_error_t e = NULL;
-    soxr = soxr_create(i_sample_rate, sample_rate, NPORTS, &e, &io_spec, &quality_spec, NULL);
+    soxr = soxr_create(sps_sample_rate, jack_sample_rate, NPORTS, &e, &io_spec, &quality_spec, NULL);
     if (!soxr) {
       die("Unable to create soxr resampler for JACK: %s", e);
     }
@@ -365,13 +365,15 @@ static int jack_delay(long *the_delay) {
   debug(2, "audio_occupancy_now is %d.", audio_occupancy_now);
   pthread_mutex_unlock(&buffer_mutex);
 
-  int64_t frames_processed_since_latest_latency_check = (delta * sample_rate) / 1000000000;
+  int64_t frames_processed_since_latest_latency_check = (delta * jack_sample_rate) / 1000000000;
   // debug(1,"delta: %" PRId64 " frames.",frames_processed_since_latest_latency_check);
   // jack_latency is set by the graph() callback, it's the average of the maximum
   // latencies of all our output ports. Adjust this constant baseline delay according
   // to the buffer fill level:
-  *the_delay = jack_latency + audio_occupancy_now - frames_processed_since_latest_latency_check;
-  // debug(1,"reporting a delay of %d frames",*the_delay);
+  int64_t the_delay_in_jack_frames = jack_latency + audio_occupancy_now - frames_processed_since_latest_latency_check;
+  int64_t the_delay_in_sps_frames = (the_delay_in_jack_frames * sps_sample_rate) / jack_sample_rate;
+  *the_delay = the_delay_in_sps_frames;
+  // debug(2, "reporting a delay of %ld frames at Shairport Sync's rate of %d FPS.",*the_delay, sps_sample_rate);
   return 0;
 }
 

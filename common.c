@@ -37,6 +37,7 @@
 #include <fcntl.h>
 #include <inttypes.h> // PRIdPTR
 #include <libgen.h>
+#include <math.h>
 #include <memory.h>
 #include <poll.h>
 #include <popt.h>
@@ -71,11 +72,12 @@
 #endif
 
 #ifdef CONFIG_OPENSSL
-#include <openssl/bio.h>
-#include <openssl/buffer.h>
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/rsa.h>
+#include <openssl/aes.h> // needed for older AES stuff
+#include <openssl/bio.h> // needed for BIO_new_mem_buf
+#include <openssl/err.h> // needed for ERR_error_string, ERR_get_error
+#include <openssl/evp.h> // needed for EVP_PKEY_CTX_new, EVP_PKEY_sign_init, EVP_PKEY_sign
+#include <openssl/pem.h> // needed for PEM_read_bio_RSAPrivateKey, EVP_PKEY_CTX_set_rsa_padding
+#include <openssl/rsa.h> // needed for EVP_PKEY_CTX_set_rsa_padding
 #endif
 
 #ifdef CONFIG_POLARSSL
@@ -98,6 +100,12 @@
 #include <mbedtls/md.h>
 #include <mbedtls/version.h>
 #include <mbedtls/x509.h>
+
+#if MBEDTLS_VERSION_MAJOR == 3
+#define MBEDTLS_PRIVATE_V3_ONLY(_q) MBEDTLS_PRIVATE(_q)
+#else
+#define MBEDTLS_PRIVATE_V3_ONLY(_q) _q
+#endif
 #endif
 
 #ifdef CONFIG_LIBDAEMON
@@ -110,9 +118,12 @@
 void set_alsa_out_dev(char *);
 #endif
 
+#ifdef CONFIG_AIRPLAY_2
+#include "nqptp-shm-structures.h"
+#endif
+
 config_t config_file_stuff;
 int type_of_exit_cleanup;
-pthread_t main_thread_id;
 uint64_t ns_time_at_startup, ns_time_at_last_debug_message;
 
 // always lock use this when accessing the ns_time_at_last_debug_message
@@ -240,21 +251,6 @@ void log_to_syslog() {
 }
 
 shairport_cfg config;
-
-// accessors for multi-thread-access fields in the conn structure
-
-double get_config_airplay_volume() {
-  config_lock;
-  double v = config.airplay_volume;
-  config_unlock;
-  return v;
-}
-
-void set_config_airplay_volume(double v) {
-  config_lock;
-  config.airplay_volume = v;
-  config_unlock;
-}
 
 volatile int debuglev = 0;
 
@@ -578,6 +574,38 @@ void _inform(const char *thefilename, const int linenumber, const char *format, 
   pthread_setcancelstate(oldState, NULL);
 }
 
+void _debug_print_buffer(const char *thefilename, const int linenumber, int level, void *vbuf,
+                         size_t buf_len) {
+  if (level > debuglev)
+    return;
+  char *buf = (char *)vbuf;
+  char *obf =
+      malloc(buf_len * 4 + 1); // to be on the safe side -- 4 characters on average for each byte
+  if (obf != NULL) {
+    char *obfp = obf;
+    unsigned int obfc;
+    for (obfc = 0; obfc < buf_len; obfc++) {
+      snprintf(obfp, 3, "%02X", buf[obfc]);
+      obfp += 2;
+      if (obfc != buf_len - 1) {
+        if (obfc % 32 == 31) {
+          snprintf(obfp, 5, " || ");
+          obfp += 4;
+        } else if (obfc % 16 == 15) {
+          snprintf(obfp, 4, " | ");
+          obfp += 3;
+        } else if (obfc % 4 == 3) {
+          snprintf(obfp, 2, " ");
+          obfp += 1;
+        }
+      }
+    };
+    *obfp = 0;
+    _debug(thefilename, linenumber, level, "%s", obf);
+    free(obf);
+  }
+}
+
 // The following two functions are adapted slightly and with thanks from Jonathan Leffler's sample
 // code at
 // https://stackoverflow.com/questions/675039/how-can-i-create-directory-tree-in-c-linux
@@ -820,25 +848,82 @@ static char super_secret_key[] =
 uint8_t *rsa_apply(uint8_t *input, int inlen, int *outlen, int mode) {
   int oldState;
   pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &oldState);
-  RSA *rsa = NULL;
-  if (!rsa) {
-    BIO *bmem = BIO_new_mem_buf(super_secret_key, -1);
-    rsa = PEM_read_bio_RSAPrivateKey(bmem, NULL, NULL, NULL);
-    BIO_free(bmem);
-  }
+  uint8_t *out = NULL;
+  BIO *bmem = BIO_new_mem_buf(super_secret_key, -1);                  // 1.0.2
+  EVP_PKEY *rsaKey = PEM_read_bio_PrivateKey(bmem, NULL, NULL, NULL); // 1.0.2
+  BIO_free(bmem);
+  size_t ol = 0;
+  if (rsaKey != NULL) {
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new(rsaKey, NULL); // 1.0.2
+    if (ctx != NULL) {
 
-  uint8_t *out = malloc(RSA_size(rsa));
-  switch (mode) {
-  case RSA_MODE_AUTH:
-    *outlen = RSA_private_encrypt(inlen, input, out, rsa, RSA_PKCS1_PADDING);
-    break;
-  case RSA_MODE_KEY:
-    *outlen = RSA_private_decrypt(inlen, input, out, rsa, RSA_PKCS1_OAEP_PADDING);
-    break;
-  default:
-    die("bad rsa mode");
+      switch (mode) {
+      case RSA_MODE_AUTH: {
+        if (EVP_PKEY_sign_init(ctx) > 0) {                                                // 1.0.2
+          if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_PADDING) > 0) {                 // 1.0.2
+            if (EVP_PKEY_sign(ctx, NULL, &ol, (const unsigned char *)input, inlen) > 0) { // 1.0.2
+              out = (unsigned char *)malloc(ol);
+              if (EVP_PKEY_sign(ctx, out, &ol, (const unsigned char *)input, inlen) > 0) { // 1.0.2
+                debug(3, "success with output length of %lu.", ol);
+              } else {
+                debug(1, "error 2 \"%s\" with EVP_PKEY_sign:",
+                      ERR_error_string(ERR_get_error(), NULL));
+              }
+            } else {
+              debug(1,
+                    "error 1 \"%s\" with EVP_PKEY_sign:", ERR_error_string(ERR_get_error(), NULL));
+            }
+          } else {
+            debug(1, "error \"%s\" with EVP_PKEY_CTX_set_rsa_padding:",
+                  ERR_error_string(ERR_get_error(), NULL));
+          }
+        } else {
+          debug(1,
+                "error \"%s\" with EVP_PKEY_sign_init:", ERR_error_string(ERR_get_error(), NULL));
+        }
+      } break;
+      case RSA_MODE_KEY: {
+        if (EVP_PKEY_decrypt_init(ctx) > 0) {
+          if (EVP_PKEY_CTX_set_rsa_padding(ctx, RSA_PKCS1_OAEP_PADDING) > 0) {
+            /* Determine buffer length */
+            if (EVP_PKEY_decrypt(ctx, NULL, &ol, (const unsigned char *)input, inlen) > 0) {
+              out = OPENSSL_malloc(ol);
+              if (out != NULL) {
+                if (EVP_PKEY_decrypt(ctx, out, &ol, (const unsigned char *)input, inlen) > 0) {
+                  debug(3, "decrypt success");
+                } else {
+                  debug(1, "error \"%s\" with EVP_PKEY_decrypt:",
+                        ERR_error_string(ERR_get_error(), NULL));
+                }
+              } else {
+                debug(1, "OPENSSL_malloc failed");
+              }
+            } else {
+              debug(1,
+                    "error \"%s\" with EVP_PKEY_decrypt:", ERR_error_string(ERR_get_error(), NULL));
+            }
+          } else {
+            debug(1, "error \"%s\" with EVP_PKEY_CTX_set_rsa_padding:",
+                  ERR_error_string(ERR_get_error(), NULL));
+          }
+        } else {
+          debug(1, "error \"%s\" with EVP_PKEY_decrypt_init:",
+                ERR_error_string(ERR_get_error(), NULL));
+        }
+      } break;
+      default:
+        debug(1, "Unknown mode");
+        break;
+      }
+      EVP_PKEY_CTX_free(ctx); // 1.0.2
+    } else {
+      printf("error \"%s\" with EVP_PKEY_CTX_new:\n", ERR_error_string(ERR_get_error(), NULL));
+    }
+    EVP_PKEY_free(rsaKey); // 1.0.2
+  } else {
+    printf("error \"%s\" with EVP_PKEY_new:\n", ERR_error_string(ERR_get_error(), NULL));
   }
-  RSA_free(rsa);
+  *outlen = ol;
   pthread_setcancelstate(oldState, NULL);
   return out;
 }
@@ -863,8 +948,14 @@ uint8_t *rsa_apply(uint8_t *input, int inlen, int *outlen, int mode) {
 
   mbedtls_pk_init(&pkctx);
 
+#if MBEDTLS_VERSION_MAJOR == 3
   rc = mbedtls_pk_parse_key(&pkctx, (unsigned char *)super_secret_key, sizeof(super_secret_key),
+                            NULL, 0, mbedtls_ctr_drbg_random, &ctr_drbg);
+#else
+  rc = mbedtls_pk_parse_key(&pkctx, (unsigned char *)super_secret_key, sizeof(super_secret_key), 
                             NULL, 0);
+
+#endif
   if (rc != 0)
     debug(1, "Error %d reading the private key.", rc);
 
@@ -873,19 +964,29 @@ uint8_t *rsa_apply(uint8_t *input, int inlen, int *outlen, int mode) {
 
   switch (mode) {
   case RSA_MODE_AUTH:
-    mbedtls_rsa_set_padding(trsa, MBEDTLS_RSA_PKCS_V15, MBEDTLS_MD_NONE);
-    outbuf = malloc(trsa->len);
+    mbedtls_rsa_set_padding(trsa, MBEDTLS_RSA_PKCS_V15, MBEDTLS_MD_NONE);    
+    outbuf = malloc(trsa->MBEDTLS_PRIVATE_V3_ONLY(len));
+#if MBEDTLS_VERSION_MAJOR == 3
+    rc = mbedtls_rsa_pkcs1_encrypt(trsa, mbedtls_ctr_drbg_random, &ctr_drbg,
+                                   inlen, input, outbuf);
+#else
     rc = mbedtls_rsa_pkcs1_encrypt(trsa, mbedtls_ctr_drbg_random, &ctr_drbg, MBEDTLS_RSA_PRIVATE,
                                    inlen, input, outbuf);
+#endif
     if (rc != 0)
       debug(1, "mbedtls_pk_encrypt error %d.", rc);
-    *outlen = trsa->len;
+    *outlen = trsa->MBEDTLS_PRIVATE_V3_ONLY(len);
     break;
   case RSA_MODE_KEY:
     mbedtls_rsa_set_padding(trsa, MBEDTLS_RSA_PKCS_V21, MBEDTLS_MD_SHA1);
-    outbuf = malloc(trsa->len);
+    outbuf = malloc(trsa->MBEDTLS_PRIVATE_V3_ONLY(len));
+#if MBEDTLS_VERSION_MAJOR == 3
+    rc = mbedtls_rsa_pkcs1_decrypt(trsa, mbedtls_ctr_drbg_random, &ctr_drbg,
+                                   &olen, input, outbuf, trsa->MBEDTLS_PRIVATE_V3_ONLY(len));
+#else
     rc = mbedtls_rsa_pkcs1_decrypt(trsa, mbedtls_ctr_drbg_random, &ctr_drbg, MBEDTLS_RSA_PRIVATE,
                                    &olen, input, outbuf, trsa->len);
+#endif
     if (rc != 0)
       debug(1, "mbedtls_pk_decrypt error %d.", rc);
     *outlen = olen;
@@ -1145,7 +1246,25 @@ uint32_t uatoi(const char *nptr) {
   return r;
 }
 
+// clang-format off
+
+// Given an AirPlay volume (0 to -30) and the highest and lowest attenuations available in the mixer,
+// the *vol2attn functions return anmattenuation depending on the AirPlay volume
+// and the function's transfer function.
+
+// Note that the max_db and min_db are given as dB*100
+
+// clang-format on
+
 double flat_vol2attn(double vol, long max_db, long min_db) {
+  // clang-format off
+
+// This "flat" volume control profile has the property that a given change in the AirPlay volume
+// always results in the same change in output dB. For example, if a change of AirPlay volume
+// from 0 to -4 resulted in a 7 dB change, then a change in AirPlay volume from -20 to -24
+// would also result in a 7 dB change.
+
+  // clang-format on
   double vol_setting = min_db; // if all else fails, set this, for safety
 
   if ((vol <= 0.0) && (vol >= -30.0)) {
@@ -1154,20 +1273,76 @@ double flat_vol2attn(double vol, long max_db, long min_db) {
     // max_db);
   } else if (vol != -144.0) {
     debug(1,
-          "Linear volume request value %f is out of range: should be from 0.0 to -30.0 or -144.0.",
+          "flat_vol2attn volume request value %f is out of range: should be from 0.0 to -30.0 or "
+          "-144.0.",
           vol);
   }
   return vol_setting;
 }
-// Given a volume (0 to -30) and high and low attenuations available in the mixer in dB, return an
-// attenuation depending on the volume and the function's transfer function
-// See http://tangentsoft.net/audio/atten.html for data on good attenuators.
-// We want a smooth attenuation function, like, for example, the ALPS RK27 Potentiometer transfer
-// functions referred to at the link above.
 
-// Note that the max_db and min_db are given as dB*100
+double dasl_tapered_vol2attn(double vol, long max_db, long min_db) {
+  // clang-format off
+
+// The "dasl_tapered" volume control profile has the property that halving the AirPlay volume (the "vol" parameter)
+// reduces the output level by 10 dB, which corresponds to roughly halving the perceived volume.
+
+// For example, if the AirPlay volume goes from 0.0 to -15.0, the output level will decrease by 10 dB.
+// Halving the AirPlay volume again, from -15 to -22.5, will decrease output by a further 10 dB.
+// Reducing the AirPlay volume by half again, this time from -22.5 to -25.25 decreases the output by a further 10 dB,
+// meaning that at AirPlay volume -25.25, the volume is decreased 30 dB.
+
+// If the attenuation range of the mixer is restricted -- for example, if it is just 30 dB --
+// the output level would reach its minimum before the AirPlay volume reached its minimum.
+// This would result in part of the AirPlay volume control's range where
+// changing the AirPlay volume would make no difference to the output level.
+
+// In the example of an attenuator with a range of 00.dB to -30.0dB, this
+// "dead zone" would be from AirPlay volume -30.0 to -25.25,
+// i.e. about one sixth of its -30.0 to 0.0 travel.
+
+// To work around this, the "flat" output level is used if it gives a
+// higher output dB value than the calculation described above.
+// If the device's attenuation range is over about 50 dB,
+// the flat output level will hardly be needed at all.
+
+  // clang-format on
+  double vol_setting = min_db; // if all else fails, set this, for safety
+
+  if ((vol <= 0.0) && (vol >= -30.0)) {
+    double vol_pct = 1 - (vol / -30.0); // This will be in the range [0, 1]
+    if (vol_pct <= 0) {
+      return min_db;
+    }
+
+    double flat_setting = min_db + (max_db - min_db) * vol_pct;
+    vol_setting =
+        max_db + 1000 * log10(vol_pct) / log10(2); // This will be in the range [-inf, max_db]
+    if (vol_setting < flat_setting) {
+      debug(3,
+            "dasl_tapered_vol2attn returning a flat setting of %f for AirPlay volume %f instead of "
+            "a tapered setting of %f in a range from %f to %f.",
+            flat_setting, vol, vol_setting, 1.0 * min_db, 1.0 * max_db);
+      return flat_setting;
+    }
+    if (vol_setting > max_db) {
+      return max_db;
+    }
+    return vol_setting;
+  } else if (vol != -144.0) {
+    debug(1,
+          "dasl_tapered volume request value %f is out of range: should be from 0.0 to -30.0 or "
+          "-144.0.",
+          vol);
+  }
+  return vol_setting;
+}
 
 double vol2attn(double vol, long max_db, long min_db) {
+
+  // See http://tangentsoft.net/audio/atten.html for data on good attenuators.
+
+  // We want a smooth attenuation function, like, for example, the ALPS RK27 Potentiometer transfer
+  // functions referred to at the link above.
 
   // We use a little coordinate geometry to build a transfer function from the volume passed in to
   // the device's dynamic range. (See the diagram in the documents folder.) The x axis is the
@@ -1211,7 +1386,7 @@ double vol2attn(double vol, long max_db, long min_db) {
     }
     vol_setting += max_db;
   } else if (vol != -144.0) {
-    debug(1, "Volume request value %f is out of range: should be from 0.0 to -30.0 or -144.0.",
+    debug(1, "vol2attn request value %f is out of range: should be from 0.0 to -30.0 or -144.0.",
           vol);
     vol_setting = min_db; // for safety, return the lowest setting...
   } else {
@@ -1573,7 +1748,7 @@ int _debug_mutex_unlock(pthread_mutex_t *mutex, const char *mutexname, const cha
 }
 
 void malloc_cleanup(void *arg) {
-  // debug(1, "malloc cleanup called.");
+  // debug(1, "malloc cleanup freeing %" PRIxPTR ".", arg);
   free(arg);
 }
 
@@ -1604,6 +1779,8 @@ void mutex_cleanup(void *arg) {
 
 void mutex_unlock(void *arg) { pthread_mutex_unlock((pthread_mutex_t *)arg); }
 
+void rwlock_unlock(void *arg) { pthread_rwlock_unlock((pthread_rwlock_t *)arg); }
+
 void thread_cleanup(void *arg) {
   debug(3, "thread_cleanup called.");
   pthread_t *thread = (pthread_t *)arg;
@@ -1628,6 +1805,9 @@ char *get_version_string() {
       strcpy(version_string, PACKAGE_VERSION);
 #ifdef CONFIG_AIRPLAY_2
     strcat(version_string, "-AirPlay2");
+    char smiv[1024];
+    snprintf(smiv, 1024, "-smi%u", NQPTP_SHM_STRUCTURES_VERSION);
+    strcat(version_string, smiv);
 #endif
 #ifdef CONFIG_APPLE_ALAC
     strcat(version_string, "-alac");
@@ -1953,48 +2133,65 @@ int32_t mod32Difference(uint32_t a, uint32_t b) {
 }
 
 int get_device_id(uint8_t *id, int int_length) {
-  int response = 0;
+
+  uint64_t wait_time = 10000000000L; // wait up to this (ns) long to get a MAC address
+
+  int response = -1;
   struct ifaddrs *ifaddr = NULL;
   struct ifaddrs *ifa = NULL;
+
   int i = 0;
   uint8_t *t = id;
   for (i = 0; i < int_length; i++) {
     *t++ = 0;
   }
 
-  if (getifaddrs(&ifaddr) == -1) {
-    response = -1;
-  } else {
-    t = id;
-    int found = 0;
+  uint64_t wait_until = get_absolute_time_in_ns();
+  wait_until = wait_until + wait_time;
 
-    for (ifa = ifaddr; ((ifa != NULL) && (found == 0)); ifa = ifa->ifa_next) {
+  int64_t time_to_wait;
+  do {
+    if (getifaddrs(&ifaddr) == 0) {
+      t = id;
+      int found = 0;
+
+      for (ifa = ifaddr; ((ifa != NULL) && (found == 0)); ifa = ifa->ifa_next) {
 #ifdef AF_PACKET
-      if ((ifa->ifa_addr) && (ifa->ifa_addr->sa_family == AF_PACKET)) {
-        struct sockaddr_ll *s = (struct sockaddr_ll *)ifa->ifa_addr;
-        if ((strcmp(ifa->ifa_name, "lo") != 0)) {
-          found = 1;
-          for (i = 0; ((i < s->sll_halen) && (i < int_length)); i++) {
-            *t++ = s->sll_addr[i];
+        if ((ifa->ifa_addr) && (ifa->ifa_addr->sa_family == AF_PACKET)) {
+          struct sockaddr_ll *s = (struct sockaddr_ll *)ifa->ifa_addr;
+          if ((strcmp(ifa->ifa_name, "lo") != 0)) {
+            found = 1;
+            response = 0;
+            for (i = 0; ((i < s->sll_halen) && (i < int_length)); i++) {
+              *t++ = s->sll_addr[i];
+            }
           }
         }
-      }
 #else
 #ifdef AF_LINK
-      struct sockaddr_dl *sdl = (struct sockaddr_dl *)ifa->ifa_addr;
-      if ((sdl) && (sdl->sdl_family == AF_LINK)) {
-        if (sdl->sdl_type == IFT_ETHER) {
-          found = 1;
-          uint8_t *s = (uint8_t *)LLADDR(sdl);
-          for (i = 0; ((i < sdl->sdl_alen) && (i < int_length)); i++) {
-            *t++ = *s++;
+        struct sockaddr_dl *sdl = (struct sockaddr_dl *)ifa->ifa_addr;
+        if ((sdl) && (sdl->sdl_family == AF_LINK)) {
+          if (sdl->sdl_type == IFT_ETHER) {
+            found = 1;
+            response = 0;
+            uint8_t *s = (uint8_t *)LLADDR(sdl);
+            for (i = 0; ((i < sdl->sdl_alen) && (i < int_length)); i++) {
+              *t++ = *s++;
+            }
           }
         }
+#endif
+#endif
       }
-#endif
-#endif
+      freeifaddrs(ifaddr);
     }
-    freeifaddrs(ifaddr);
-  }
+    // wait a little time if we haven't got a response
+    if (response != 0) {
+      usleep(100000);
+    }
+    time_to_wait = wait_until - get_absolute_time_in_ns();
+  } while ((response != 0) && (time_to_wait > 0));
+  if (response != 0)
+    warn("Can't create a device ID -- no valid MAC address can be found.");
   return response;
 }

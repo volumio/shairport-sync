@@ -5,7 +5,7 @@
  * then you need a metadata hub,
  * where everything is stored
  * This file is part of Shairport Sync.
- * Copyright (c) Mike Brady 2017--2020
+ * Copyright (c) Mike Brady 2017--2022
  * All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person
@@ -56,7 +56,7 @@
 #endif
 
 #ifdef CONFIG_OPENSSL
-#include <openssl/md5.h>
+#include <openssl/evp.h>
 #endif
 
 struct metadata_bundle metadata_store;
@@ -102,6 +102,7 @@ void run_metadata_watchers(void) {
   // turn off changed flags
   metadata_store.cover_art_pathname_changed = 0;
   metadata_store.client_ip_changed = 0;
+  metadata_store.client_name_changed = 0;
   metadata_store.server_ip_changed = 0;
   metadata_store.progress_string_changed = 0;
   metadata_store.item_id_changed = 0;
@@ -109,6 +110,7 @@ void run_metadata_watchers(void) {
   metadata_store.artist_name_changed = 0;
   metadata_store.album_artist_name_changed = 0;
   metadata_store.album_name_changed = 0;
+  metadata_store.song_data_kind_changed = 0;
   metadata_store.track_name_changed = 0;
   metadata_store.genre_changed = 0;
   metadata_store.comment_changed = 0;
@@ -207,10 +209,14 @@ char *metadata_write_image_file(const char *buf, int len) {
     // uint8_t ap_md5[16];
 
 #ifdef CONFIG_OPENSSL
-    MD5_CTX ctx;
-    MD5_Init(&ctx);
-    MD5_Update(&ctx, buf, len);
-    MD5_Final(img_md5, &ctx);
+    EVP_MD_CTX *ctx;
+    unsigned int img_md5_len = EVP_MD_size(EVP_md5());
+
+    ctx = EVP_MD_CTX_new();
+    EVP_DigestInit_ex(ctx, EVP_md5(), NULL);
+    EVP_DigestUpdate(ctx, buf, len);
+    EVP_DigestFinal_ex(ctx, img_md5, &img_md5_len);
+    EVP_MD_CTX_free(ctx);
 #endif
 
 #ifdef CONFIG_MBEDTLS
@@ -326,24 +332,41 @@ char *metadata_write_image_file(const char *buf, int len) {
   return path;
 }
 
+int metadata_packet_item_changed = 0; // set if any parsed part of a metadata stream changes
+
 void metadata_hub_process_metadata(uint32_t type, uint32_t code, char *data, uint32_t length) {
   // metadata coming in from the audio source or from Shairport Sync itself passes through here
   // this has more information about tags, which might be relevant:
   // https://code.google.com/p/ytrack/wiki/DMAP
 
-  // all the following items of metadata are contained in one metadata packet
-  // they are preceded by an 'ssnc' 'mdst' item and followed by an 'ssnc 'mden' item.
-  // we don't set "changed" for them individually; instead we set it when the  'mden' token
-  // comes in if the metadata_packet_item_changed is set.
+  // Some metadata items are contained in one metadata packet.
+  // The start of the metadata packet is signalled by an 'ssnc' 'mdst' item and
+  // the end of it by an 'ssnc 'mden' item.
+  // We don't set "changed" for them individually; instead we set it when the  'mden' token
+  // comes in if the metadata_packet_item_changed item is set by parsed items
+  // within the packet.
 
   int changed = 0;
-  int metadata_packet_item_changed = 0;
   metadata_hub_modify_prolog();
   pthread_cleanup_push(metadata_hub_unlock_hub_mutex_cleanup, NULL);
 
   char *cs;
   if (type == 'core') {
     switch (code) {
+    case 'asdk': {
+      // get the one-byte number as an unsigned number
+      int song_data_kind = data[0];           // one byte
+      song_data_kind = song_data_kind & 0xFF; // unsigned
+      debug(2, "MH Song Data Kind seen: \"%d\" of length %u.", song_data_kind, length);
+      if ((song_data_kind != metadata_store.song_data_kind) ||
+          (metadata_store.song_data_kind_is_valid == 0)) {
+        metadata_store.song_data_kind = song_data_kind;
+        metadata_store.song_data_kind_changed = 1;
+        metadata_store.song_data_kind_is_valid = 1;
+        debug(2, "MH Song Data Kind set to: \"%d\"", metadata_store.song_data_kind);
+        metadata_packet_item_changed = 1;
+      }
+    } break;
     case 'mper': {
       // get the 64-bit number as a uint64_t by reading two uint32_t s and combining them
       uint64_t vl = ntohl(*(uint32_t *)data); // get the high order 32 bits
@@ -351,10 +374,10 @@ void metadata_hub_process_metadata(uint32_t type, uint32_t code, char *data, uin
       uint64_t ul = ntohl(*(uint32_t *)(data + sizeof(uint32_t))); // and the low order 32 bits
       vl = vl + ul;
       debug(2, "MH Item ID seen: \"%" PRIx64 "\" of length %u.", vl, length);
-      if (vl != metadata_store.item_id) {
+      if ((vl != metadata_store.item_id) || (metadata_store.item_id_is_valid == 0)) {
         metadata_store.item_id = vl;
         metadata_store.item_id_changed = 1;
-        metadata_store.item_id_received = 1;
+        metadata_store.item_id_is_valid = 1;
         debug(2, "MH Item ID set to: \"%" PRIx64 "\"", metadata_store.item_id);
         metadata_packet_item_changed = 1;
       }
@@ -362,9 +385,11 @@ void metadata_hub_process_metadata(uint32_t type, uint32_t code, char *data, uin
     case 'astm': {
       uint32_t ui = ntohl(*(uint32_t *)data);
       debug(2, "MH Song Time seen: \"%u\" of length %u.", ui, length);
-      if (ui != metadata_store.songtime_in_milliseconds) {
+      if ((ui != metadata_store.songtime_in_milliseconds) ||
+          (metadata_store.songtime_in_milliseconds_is_valid == 0)) {
         metadata_store.songtime_in_milliseconds = ui;
         metadata_store.songtime_in_milliseconds_changed = 1;
+        metadata_store.songtime_in_milliseconds_is_valid = 1;
         debug(2, "MH Song Time set to: \"%u\"", metadata_store.songtime_in_milliseconds);
         metadata_packet_item_changed = 1;
       }
@@ -507,7 +532,10 @@ void metadata_hub_process_metadata(uint32_t type, uint32_t code, char *data, uin
       metadata_packet_item_changed = 0;
       break;
     case 'mden':
-      debug(2, "MH Metadata stream processing end.");
+      if (metadata_packet_item_changed != 0)
+        debug(2, "MH Metadata stream processing end with changes.");
+      else
+        debug(2, "MH Metadata stream processing end without changes.");
       changed = metadata_packet_item_changed;
       break;
     case 'PICT':
@@ -543,12 +571,47 @@ void metadata_hub_process_metadata(uint32_t type, uint32_t code, char *data, uin
       }
       free(cs);
       break;
+    case 'snam':
+      cs = strndup(data, length);
+      if (string_update(&metadata_store.client_name, &metadata_store.client_name_changed, cs)) {
+        changed = 1;
+        debug(2, "MH Client Name set to: \"%s\"", metadata_store.client_name);
+      }
+      free(cs);
+      break;
     case 'prgr':
       cs = strndup(data, length);
       if (string_update(&metadata_store.progress_string, &metadata_store.progress_string_changed,
                         cs)) {
         changed = 1;
         debug(2, "MH Progress String set to: \"%s\"", metadata_store.progress_string);
+      }
+      free(cs);
+      break;
+    case 'phbt':
+      cs = strndup(data, length);
+      if (string_update(&metadata_store.frame_position_string,
+                        &metadata_store.frame_position_string_changed, cs)) {
+        changed = 1;
+        debug(2, "MH Frame Position String set to: \"%s\"", metadata_store.frame_position_string);
+      }
+      free(cs);
+      break;
+    case 'phb0':
+      cs = strndup(data, length);
+      if (string_update(&metadata_store.first_frame_position_string,
+                        &metadata_store.first_frame_position_string_changed, cs)) {
+        changed = 1;
+        debug(2, "MH First Frame Position String set to: \"%s\"",
+              metadata_store.first_frame_position_string);
+      }
+      free(cs);
+      break;
+    case 'styp':
+      cs = strndup(data, length);
+      if (string_update(&metadata_store.stream_type, &metadata_store.stream_type_changed, cs)) {
+        changed = 1;
+        debug(2, "MH Stream Type set to: \"%s\"", metadata_store.stream_type);
       }
       free(cs);
       break;
@@ -568,6 +631,7 @@ void metadata_hub_process_metadata(uint32_t type, uint32_t code, char *data, uin
       changed = (metadata_store.active_state != AM_INACTIVE);
       metadata_store.active_state = AM_INACTIVE;
       break;
+    case 'pres':
     case 'pbeg':
       changed = ((metadata_store.player_state != PS_PLAYING) ||
                  (metadata_store.player_thread_active == 0));
@@ -580,15 +644,18 @@ void metadata_hub_process_metadata(uint32_t type, uint32_t code, char *data, uin
       metadata_store.player_state = PS_STOPPED;
       metadata_store.player_thread_active = 0;
       break;
-    case 'pfls':
+    case 'paus':
       changed = (metadata_store.player_state != PS_PAUSED);
       metadata_store.player_state = PS_PAUSED;
       break;
-    case 'pffr': // this is sent when the first frame has been received
-    case 'prsm':
-      changed = (metadata_store.player_state != PS_PLAYING);
-      metadata_store.player_state = PS_PLAYING;
-      break;
+      /*
+      // not using this anymore.
+          case 'pffr': // this is sent when the first frame has been received
+          case 'prsm':
+            changed = (metadata_store.player_state != PS_PLAYING);
+            metadata_store.player_state = PS_PLAYING;
+            break;
+      */
     case 'pvol': {
       // Note: it's assumed that the config.airplay volume has already been correctly set.
       // int32_t actual_volume;

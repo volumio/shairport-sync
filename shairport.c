@@ -2,7 +2,7 @@
  * Shairport, an Apple Airplay receiver
  * Copyright (c) James Laird 2013
  * All rights reserved.
- * Modifications and additions (c) Mike Brady 2014--2022
+ * Modifications and additions (c) Mike Brady 2014--2023
  *
  * Permission is hereby granted, free of charge, to any person
  * obtaining a copy of this software and associated documentation
@@ -25,6 +25,8 @@
  * OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <getopt.h>
@@ -35,9 +37,7 @@
 #include <popt.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -61,6 +61,7 @@
 #endif
 
 #ifdef CONFIG_OPENSSL
+#include <openssl/evp.h>
 #include <openssl/md5.h>
 #endif
 
@@ -130,11 +131,14 @@ int killOption = 0;
 int daemonisewith = 0;
 int daemonisewithout = 0;
 int log_to_syslog_selected = 0;
+#ifdef CONFIG_LIBDAEMON
+int log_to_default = 1; // needed if libdaemon used
+#endif
+int display_config_selected = 0;
 int log_to_syslog_select_is_first_command_line_argument = 0;
 
-// static int shutting_down = 0;
 char configuration_file_path[4096 + 1];
-char actual_configuration_file_path[4096 + 1];
+char *config_file_real_path = NULL;
 
 char first_backend_name[256];
 
@@ -171,6 +175,7 @@ int has_fltp_capable_aac_decoder(void) {
 
 #ifdef CONFIG_SOXR
 pthread_t soxr_time_check_thread;
+int soxr_time_check_thread_started = 0;
 void *soxr_time_check(__attribute__((unused)) void *arg) {
   const int buffer_length = 352;
   int32_t inbuffer[buffer_length * 2];
@@ -270,91 +275,62 @@ void usage(char *progname) {
 
   } else {
 #endif
-
+    // clang-format off
+    printf("Please use the configuration file for settings where possible.\n");
+    printf("Many more settings are available in the configuration file.\n");
+    printf("\n");
     printf("Usage: %s [options...]\n", progname);
     printf("  or:  %s [options...] -- [audio output-specific options]\n", progname);
     printf("\n");
     printf("Options:\n");
-    printf("    -h, --help              show this help.\n");
-#ifdef CONFIG_LIBDAEMON
-    printf("    -d, --daemon            daemonise.\n");
-    printf("    -j, --justDaemoniseNoPIDFile            daemonise without a PID file.\n");
-    printf("    -k, --kill              kill the existing shairport daemon.\n");
-#endif
-    printf("    -V, --version           show version information.\n");
-    printf("    -c, --configfile=FILE   read configuration settings from FILE. Default is "
-           "/etc/shairport-sync.conf.\n");
-
-    printf("\n");
-    printf(
-        "The following general options are for backward compatibility. These and all new options "
-        "have settings in the configuration file, by default /etc/shairport-sync.conf:\n");
-    printf("    -v, --verbose           -v print debug information; -vv more; -vvv lots.\n");
-    printf("    -p, --port=PORT         set RTSP listening port.\n");
-    printf("    -a, --name=NAME         set advertised name.\n");
-    printf(
-        "    -L, --latency=FRAMES    [Deprecated] Set the latency for audio sent from an unknown "
-        "device.\n");
+    printf("    -h, --help              Show this help.\n");
+    printf("    -V, --version           Show version information -- the version string.\n");
+    printf("    -X, --displayConfig     Output OS information, version string, command line, configuration file and active settings to the log.\n");
+    printf("    --statistics            Print some interesting statistics. More will be printed if -v / -vv / -vvv are also chosen.\n");
+    printf("    -v, --verbose           Print debug information; -v some; -vv more; -vvv lots -- generally too much.\n");
+    printf("    -c, --configfile=FILE   Read configuration settings from FILE. Default is %s.\n", configuration_file_path);
+    printf("    -a, --name=NAME         Set service name. Default is the hostname with first letter capitalised.\n");
+    printf("    --password=PASSWORD     Require PASSWORD to connect. Default is no password. (Classic AirPlay only.)\n");
+    printf("    -p, --port=PORT         Set RTSP listening port. Default 5000; 7000 for AirPlay 2.\n");
+    printf("    -L, --latency=FRAMES    [Deprecated] Set the latency for audio sent from an unknown device.\n");
     printf("                            The default is to set it automatically.\n");
-    printf("    -S, --stuffing=MODE set how to adjust current latency to match desired latency, "
-           "where \n");
-    printf("                            \"basic\" inserts or deletes audio frames from "
-           "packet frames with low processor overhead, and \n");
-    printf(
-        "                            \"soxr\" uses libsoxr to minimally resample packet frames -- "
-        "moderate processor overhead.\n");
-    printf("                            \"auto\" (default) chooses basic or soxr depending on "
-           "processor capability.\n");
-    printf(
-        "                            \"soxr\" option only available if built with soxr support.\n");
-    printf("    -B, --on-start=PROGRAM  run PROGRAM when playback is about to begin.\n");
-    printf("    -E, --on-stop=PROGRAM   run PROGRAM when playback has ended.\n");
-    printf(
-        "                            For -B and -E options, specify the full path to the program, "
-        "e.g. /usr/bin/logger.\n");
-    printf("                            Executable scripts work, but must have the appropriate "
-           "shebang "
-           "(#!/bin/sh) in the headline.\n");
-    printf(
-        "    -w, --wait-cmd          wait until the -B or -E programs finish before continuing.\n");
-    printf("    -o, --output=BACKEND    select audio output method.\n");
-    printf("    -m, --mdns=BACKEND      force the use of BACKEND to advertize the service.\n");
-    printf("                            if no mdns provider is specified,\n");
-    printf("                            shairport tries them all until one works.\n");
-    printf(
-        "    -r, --resync=THRESHOLD  [Deprecated] resync if error exceeds this number of frames. "
-        "Set to 0 to "
-        "stop resyncing.\n");
-    printf(
-        "    -t, --timeout=SECONDS   go back to idle mode from play mode after a break in "
-        "communications of this many seconds (default 120). Set to 0 never to exit play mode.\n");
-    printf("    --statistics            print some interesting statistics -- output to the logfile "
-           "if running as a daemon.\n");
-    printf("    --tolerance=TOLERANCE   [Deprecated] allow a synchronization error of TOLERANCE "
-           "frames (default "
-           "88) before trying to correct it.\n");
-    printf("    --password=PASSWORD     require PASSWORD to connect. Default is not to require a "
-           "password.\n");
-    printf("    --logOutputLevel        log the output level setting -- useful for setting maximum "
-           "volume.\n");
-#ifdef CONFIG_METADATA
-    printf("    -M, --metadata-enable   ask for metadata from the source and process it.\n");
-    printf("    --metadata-pipename=PIPE send metadata to PIPE, e.g. "
-           "--metadata-pipename=/tmp/%s-metadata.\n",
-           config.appName);
-    printf("                            The default is /tmp/%s-metadata.\n", config.appName);
-    printf(
-        "    -g, --get-coverart      Include cover art in the metadata to be gathered and sent.\n");
+    printf("    -S, --stuffing=MODE     Set how to adjust current latency to match desired latency, where:\n");
+    printf("                            \"basic\" inserts or deletes audio frames from packet frames with low processor overhead, and\n");
+    printf("                            \"soxr\" uses libsoxr to minimally resample packet frames -- moderate processor overhead.\n");
+    printf("                            The default \"auto\" setting chooses basic or soxr depending on processor capability.\n");
+    printf("                            The \"soxr\" option is only available if built with soxr support.\n");
+    printf("    -B, --on-start=PROGRAM  Run PROGRAM when playback is about to begin.\n");
+    printf("    -E, --on-stop=PROGRAM   Run PROGRAM when playback has ended.\n");
+    printf("                            For -B and -E options, specify the full path to the program and arguments, e.g. \"/usr/bin/logger\".\n");
+    printf("                            Executable scripts work, but the file must be marked executable have the appropriate shebang (#!/bin/sh) on the first line.\n");
+    printf("    -w, --wait-cmd          Wait until the -B or -E programs finish before continuing.\n");
+    printf("    -o, --output=BACKEND    Select audio backend. They are listed at the end of this text. The first one is the default.\n");
+    printf("    -m, --mdns=BACKEND      Use the mDNS backend named BACKEND to advertise the AirPlay service through Bonjour/ZeroConf.\n");
+    printf("                            They are listed at the end of this text.\n");
+    printf("                            If no mdns backend is specified, they are tried in order until one works.\n");
+    printf("    -r, --resync=THRESHOLD  [Deprecated] resync if error exceeds this number of frames. Set to 0 to stop resyncing.\n");
+    printf("    -t, --timeout=SECONDS   Go back to idle mode from play mode after a break in communications of this many seconds (default 120). Set to 0 never to exit play mode.\n");
+    printf("    --tolerance=TOLERANCE   [Deprecated] Allow a synchronization error of TOLERANCE frames (default 88) before trying to correct it.\n");
+    printf("    --logOutputLevel        Log the output level setting -- a debugging option, useful for determining the optimum maximum volume.\n");
+#ifdef CONFIG_LIBDAEMON
+    printf("    -d, --daemon            Daemonise.\n");
+    printf("    -j, --justDaemoniseNoPIDFile            Daemonise without a PID file.\n");
+    printf("    -k, --kill              Kill the existing shairport daemon.\n");
 #endif
-    printf("    --log-to-syslog         send debug and statistics information through syslog\n");
-    printf(
-        "                            If used, this should be the first command line argument.\n");
-    printf("    -u, --use-stderr        [Deprecated] This setting is not needed -- stderr is now "
-           "used by default.\n");
+#ifdef CONFIG_METADATA
+    printf("    -M, --metadata-enable   Ask for metadata from the source and process it. Much more flexibility with configuration file settings.\n");
+    printf("    --metadata-pipename=PIPE send metadata to PIPE, e.g. --metadata-pipename=/tmp/%s-metadata.\n", config.appName);
+    printf("                            The default is /tmp/%s-metadata.\n", config.appName);
+    printf("    -g, --get-coverart      Include cover art in the metadata to be gathered and sent.\n");
+#endif
+    printf("    --log-to-syslog         Send debug and statistics information through syslog\n");
+    printf("                            If used, this should be the first command line argument.\n");
+    printf("    -u, --use-stderr        [Deprecated] This setting is not needed -- stderr is now used by default and syslog is selected using --log-to-syslog.\n");
     printf("\n");
     mdns_ls_backends();
     printf("\n");
     audio_ls_outputs();
+    // clang-format on
 
 #ifdef CONFIG_AIRPLAY_2
   }
@@ -368,8 +344,8 @@ int parse_options(int argc, char **argv) {
   char *stuffing = NULL;         /* used for picking up the stuffing option */
   signed char c;                 /* used for argument parsing */
   // int i = 0;                     /* used for tracking options */
-  int fResyncthreshold = (int)(config.resyncthreshold * 44100);
-  int fTolerance = (int)(config.tolerance * 44100);
+  int resync_threshold_in_frames = 0;
+  int tolerance_in_frames = 0;
   poptContext optCon; /* context for parsing command-line options */
   struct poptOption optionsTable[] = {
       {"verbose", 'v', POPT_ARG_NONE, NULL, 'v', NULL, NULL},
@@ -380,6 +356,7 @@ int parse_options(int argc, char **argv) {
       {"statistics", 0, POPT_ARG_NONE, &config.statistics_requested, 0, NULL, NULL},
       {"logOutputLevel", 0, POPT_ARG_NONE, &config.logOutputLevel, 0, NULL, NULL},
       {"version", 'V', POPT_ARG_NONE, NULL, 0, NULL, NULL},
+      {"displayConfig", 'X', POPT_ARG_NONE, &display_config_selected, 0, NULL, NULL},
       {"port", 'p', POPT_ARG_INT, &config.port, 0, NULL, NULL},
       {"name", 'a', POPT_ARG_STRING, &raw_service_name, 0, NULL, NULL},
       {"output", 'o', POPT_ARG_STRING, &config.output_name, 0, NULL, NULL},
@@ -389,10 +366,10 @@ int parse_options(int argc, char **argv) {
       {"mdns", 'm', POPT_ARG_STRING, &config.mdns_name, 0, NULL, NULL},
       {"latency", 'L', POPT_ARG_INT, &config.userSuppliedLatency, 0, NULL, NULL},
       {"stuffing", 'S', POPT_ARG_STRING, &stuffing, 'S', NULL, NULL},
-      {"resync", 'r', POPT_ARG_INT, &fResyncthreshold, 0, NULL, NULL},
+      {"resync", 'r', POPT_ARG_INT, &resync_threshold_in_frames, 'r', NULL, NULL},
       {"timeout", 't', POPT_ARG_INT, &config.timeout, 't', NULL, NULL},
       {"password", 0, POPT_ARG_STRING, &config.password, 0, NULL, NULL},
-      {"tolerance", 'z', POPT_ARG_INT, &fTolerance, 0, NULL, NULL},
+      {"tolerance", 'z', POPT_ARG_INT, &tolerance_in_frames, 'z', NULL, NULL},
       {"use-stderr", 'u', POPT_ARG_NONE, NULL, 'u', NULL, NULL},
       {"log-to-syslog", 0, POPT_ARG_NONE, &log_to_syslog_selected, 0, NULL, NULL},
 #ifdef CONFIG_METADATA
@@ -448,10 +425,12 @@ int parse_options(int argc, char **argv) {
           "automatically received from forkedDaapd");
       break;
     case 'r':
+      config.resync_threshold = (resync_threshold_in_frames * 1.0) / 44100;
       inform("Warning: the option -r or --resync is deprecated. Please use the "
              "\"resync_threshold_in_seconds\" setting in the config file instead.");
       break;
     case 'z':
+      config.tolerance = (tolerance_in_frames * 1.0) / 44100;
       inform("Warning: the option --tolerance is deprecated. Please use the "
              "\"drift_tolerance_in_seconds\" setting in the config file instead.");
       break;
@@ -469,6 +448,9 @@ int parse_options(int argc, char **argv) {
       inform("Suggestion: make \"--log-to-syslog\" the first command line argument to ensure "
              "messages go to the syslog right from the beginning.");
     }
+#ifdef CONFIG_LIBDAEMON
+    log_to_default = 0; // a specific log output modality has been selected.
+#endif
     log_to_syslog();
   }
 
@@ -483,12 +465,15 @@ int parse_options(int argc, char **argv) {
   };
 #endif
 
-  config.resyncthreshold = 1.0 * fResyncthreshold / 44100;
-  config.tolerance = 1.0 * fTolerance / 44100;
   config.audio_backend_silent_lead_in_time_auto =
-      1;                         // start outputting silence as soon as packets start arriving
-  config.airplay_volume = -24.0; // if no volume is ever set, default to initial default value if
-                                 // nothing else comes in first.
+      1; // start outputting silence as soon as packets start arriving
+  config.default_airplay_volume = -24.0;
+  config.high_threshold_airplay_volume =
+      -16.0; // if the volume exceeds this, reset to the default volume if idle for the
+             // limit_to_high_volume_threshold_time_in_minutes time
+  config.limit_to_high_volume_threshold_time_in_minutes =
+      0; // after this time in minutes, if the volume is higher, use the default_airplay_volume
+         // volume for new play sessions.
   config.fixedLatencyOffset = 11025; // this sounds like it works properly.
   config.diagnostic_drop_packet_fraction = 0.0;
   config.active_state_timeout = 10.0;
@@ -587,18 +572,18 @@ int parse_options(int argc, char **argv) {
 
   config_init(&config_file_stuff);
 
-  char *config_file_real_path = realpath(config.configfile, NULL);
+  config_file_real_path = realpath(config.configfile, NULL);
   if (config_file_real_path == NULL) {
     debug(2, "can't resolve the configuration file \"%s\".", config.configfile);
   } else {
     debug(2, "looking for configuration file at full path \"%s\"", config_file_real_path);
     /* Read the file. If there is an error, report it and exit. */
     if (config_read_file(&config_file_stuff, config_file_real_path)) {
-      free(config_file_real_path);
       config_set_auto_convert(&config_file_stuff,
                               1); // allow autoconversion from int/float to int/float
       // make config.cfg point to it
       config.cfg = &config_file_stuff;
+
       /* Get the Service Name. */
       if (config_lookup_string(config.cfg, "general.name", &str)) {
         raw_service_name = (char *)str;
@@ -713,7 +698,7 @@ int parse_options(int argc, char **argv) {
       if (config_lookup_int(config.cfg, "general.resync_threshold", &value)) {
         inform("The resync_threshold setting is deprecated. Use "
                "resync_threshold_in_seconds instead");
-        config.resyncthreshold = 1.0 * value / 44100;
+        config.resync_threshold = 1.0 * value / 44100;
       }
 
       /* Get the drift tolerance setting. */
@@ -722,7 +707,11 @@ int parse_options(int argc, char **argv) {
 
       /* Get the resync setting. */
       if (config_lookup_float(config.cfg, "general.resync_threshold_in_seconds", &dvalue))
-        config.resyncthreshold = dvalue;
+        config.resync_threshold = dvalue;
+
+      /* Get the resync recovery time setting. */
+      if (config_lookup_float(config.cfg, "general.resync_recovery_time_in_seconds", &dvalue))
+        config.resync_recovery_time = dvalue;
 
       /* Get the verbosity setting. */
       if (config_lookup_int(config.cfg, "general.log_verbosity", &value)) {
@@ -824,6 +813,9 @@ int parse_options(int argc, char **argv) {
 
       /* Get the diagnostics output default. */
       if (config_lookup_string(config.cfg, "diagnostics.log_output_to", &str)) {
+#ifdef CONFIG_LIBDAEMON
+        log_to_default = 0; // a specific log output modality has been selected.
+#endif
         if (strcasecmp(str, "syslog") == 0)
           log_to_syslog();
         else if (strcasecmp(str, "stdout") == 0) {
@@ -854,6 +846,37 @@ int parse_options(int argc, char **argv) {
         config.volume_max_db_set = 1;
       }
 
+      /* Get the optional default_volume setting. */
+      if (config_lookup_float(config.cfg, "general.default_airplay_volume", &dvalue)) {
+        // debug(1, "Default airplay volume setting of %f on the -30.0 to 0 scale", dvalue);
+        if ((dvalue >= -30.0) && (dvalue <= 0.0)) {
+          config.default_airplay_volume = dvalue;
+        } else {
+          warn("The default airplay volume setting must be between -30.0 and 0.0.");
+        }
+      }
+
+      /* Get the optional high_volume_threshold setting. */
+      if (config_lookup_float(config.cfg, "general.high_threshold_airplay_volume", &dvalue)) {
+        // debug(1, "High threshold airplay volume setting of %f on the -30.0 to 0 scale", dvalue);
+        if ((dvalue >= -30.0) && (dvalue <= 0.0)) {
+          config.high_threshold_airplay_volume = dvalue;
+        } else {
+          warn("The high threshold airplay volume setting must be between -30.0 and 0.0.");
+        }
+      }
+
+      /* Get the optional high volume idle tiomeout setting. */
+      if (config_lookup_float(config.cfg, "general.high_volume_idle_timeout_in_minutes", &dvalue)) {
+        // debug(1, "High high_volume_idle_timeout_in_minutes setting of %f", dvalue);
+        if (dvalue >= 0.0) {
+          config.limit_to_high_volume_threshold_time_in_minutes = dvalue;
+        } else {
+          warn("The high volume idle timeout in minutes setting must be 0.0 or greater. A setting "
+               "of 0.0 disables the high volume check.");
+        }
+      }
+
       if (config_lookup_string(config.cfg, "general.run_this_when_volume_is_set", &str)) {
         config.cmd_set_volume = (char *)str;
       }
@@ -882,9 +905,11 @@ int parse_options(int argc, char **argv) {
           config.volume_control_profile = VCP_standard;
         else if (strcasecmp(str, "flat") == 0)
           config.volume_control_profile = VCP_flat;
+        else if (strcasecmp(str, "dasl_tapered") == 0)
+          config.volume_control_profile = VCP_dasl_tapered;
         else
-          die("Invalid volume_control_profile choice \"%s\". It should be \"standard\" (default) "
-              "or \"flat\"",
+          die("Invalid volume_control_profile choice \"%s\". It should be \"standard\" (default), "
+              "\"dasl_tapered\", or \"flat\"",
               str);
       }
 
@@ -1015,6 +1040,10 @@ int parse_options(int argc, char **argv) {
 
       if (config_lookup_string(config.cfg, "metadata.pipe_name", &str)) {
         config.metadata_pipename = (char *)str;
+      }
+
+      if (config_lookup_float(config.cfg, "metadata.progress_interval", &dvalue)) {
+        config.metadata_progress_interval = dvalue;
       }
 
       if (config_lookup_string(config.cfg, "metadata.socket_address", &str)) {
@@ -1178,8 +1207,8 @@ int parse_options(int argc, char **argv) {
 
     } else {
       if (config_error_type(&config_file_stuff) == CONFIG_ERR_FILE_IO)
-        debug(2, "Error reading configuration file \"%s\": \"%s\".",
-              config_error_file(&config_file_stuff), config_error_text(&config_file_stuff));
+        die("Error reading configuration file \"%s\": \"%s\".", config_file_real_path,
+            config_error_text(&config_file_stuff));
       else {
         die("Line %d of the configuration file \"%s\":\n%s", config_error_line(&config_file_stuff),
             config_error_file(&config_file_stuff), config_error_text(&config_file_stuff));
@@ -1270,6 +1299,10 @@ int parse_options(int argc, char **argv) {
     config_set_lookup_bool(config.cfg, "mqtt.publish_cover", &config.mqtt_publish_cover);
     if (config.mqtt_publish_cover && !config.get_coverart) {
       die("You need to have metadata.include_cover_art enabled in order to use mqtt.publish_cover");
+    }
+    config_set_lookup_bool(config.cfg, "mqtt.enable_autodiscovery", &config.mqtt_enable_autodiscovery);
+    if (config_lookup_string(config.cfg, "mqtt.autodiscovery_prefix", &str)) {
+      config.mqtt_autodiscovery_prefix = (char *)str;
     }
     config_set_lookup_bool(config.cfg, "mqtt.enable_remote", &config.mqtt_enable_remote);
     if (config_lookup_string(config.cfg, "mqtt.empty_payload_substitute", &str)) {
@@ -1385,6 +1418,9 @@ int parse_options(int argc, char **argv) {
   int i;
   char hexchar[] = "0123456789abcdef";
   for (i = 5; i >= 0; i--) {
+    // In AirPlay 2 mode, the AP1 name prefix must be
+    // the same as the AirPlay 2 device id less the colons.
+    config.ap1_prefix[i] = temporary_airplay_id & 0xFF;
     apids[i * 3 + 1] = hexchar[temporary_airplay_id & 0xF];
     temporary_airplay_id = temporary_airplay_id >> 4;
     apids[i * 3] = hexchar[temporary_airplay_id & 0xF];
@@ -1450,6 +1486,10 @@ int parse_options(int argc, char **argv) {
   if (tdebuglev != 0)
     debuglev = tdebuglev;
 
+  // now set the initial volume to the default volume
+  config.airplay_volume =
+      config.default_airplay_volume; // if no volume is ever set or requested, default to initial
+                                     // default value if nothing else comes in first.
   // now, do the substitutions in the service name
   char hostname[100];
   gethostname(hostname, 100);
@@ -1498,7 +1538,7 @@ int parse_options(int argc, char **argv) {
   char temp_pid_dir[4096];
   strcpy(temp_pid_dir, "/var/run/");
   strcat(temp_pid_dir, config.appName);
-  debug(1, "default pid filename is \"%s\".", temp_pid_dir);
+  debug(3, "Default PID directory is \"%s\".", temp_pid_dir);
   char *use_this_pid_dir = temp_pid_dir;
 #endif
   // debug(1,"config.piddir \"%s\".",config.piddir);
@@ -1528,18 +1568,22 @@ char pid_file_path_string[4096] = "\0";
 const char *pid_file_proc(void) {
   snprintf(pid_file_path_string, sizeof(pid_file_path_string), "%s/%s.pid", config.computed_piddir,
            daemon_pid_file_ident ? daemon_pid_file_ident : "unknown");
-  // debug(1,"pid_file_path_string \"%s\".",pid_file_path_string);
+  debug(1, "PID file: \"%s\".", pid_file_path_string);
   return pid_file_path_string;
 }
 #endif
 
 void exit_rtsp_listener() {
-  pthread_cancel(rtsp_listener_thread);
-  pthread_join(rtsp_listener_thread, NULL); // not sure you need this
+  debug(3, "exit_rtsp_listener begins");
+  if (type_of_exit_cleanup != TOE_emergency) {
+    pthread_cancel(rtsp_listener_thread);
+    pthread_join(rtsp_listener_thread, NULL); // not sure you need this
+  }
+  debug(3, "exit_rtsp_listener ends");
 }
 
 void exit_function() {
-
+  debug(3, "exit_function begins");
   if (type_of_exit_cleanup != TOE_emergency) {
     // the following is to ensure that if libdaemon has been included
     // that most of this code will be skipped when the parent process is exiting
@@ -1559,6 +1603,16 @@ void exit_function() {
       #endif
       */
 
+      debug(2, "Stopping the activity monitor.");
+      activity_monitor_stop();
+      debug(2, "Stopping the activity monitor done.");
+
+#ifdef CONFIG_DACP_CLIENT
+      debug(2, "Stopping DACP Monitor");
+      dacp_monitor_stop();
+      debug(2, "Stopping DACP Monitor Done");
+#endif
+
 #if defined(CONFIG_DBUS_INTERFACE) || defined(CONFIG_MPRIS_INTERFACE)
       /*
       Actually, there is no stop_mpris_service() function.
@@ -1569,6 +1623,7 @@ void exit_function() {
 #ifdef CONFIG_DBUS_INTERFACE
       debug(2, "Stopping D-Bus service");
       stop_dbus_service();
+      debug(2, "Stopping D-Bus service done");
 #endif
       if (g_main_loop) {
         debug(2, "Stopping D-Bus Loop Thread");
@@ -1579,35 +1634,37 @@ void exit_function() {
         // so don't wait for it
         if (type_of_exit_cleanup != TOE_dbus)
           pthread_join(dbus_thread, NULL);
+        debug(2, "Stopping D-Bus Loop Thread Done");
       }
-#endif
-
-#ifdef CONFIG_DACP_CLIENT
-      debug(2, "Stopping DACP Monitor");
-      dacp_monitor_stop();
 #endif
 
 #ifdef CONFIG_METADATA_HUB
       debug(2, "Stopping metadata hub");
       metadata_hub_stop();
+      debug(2, "Stopping metadata done");
 #endif
 
 #ifdef CONFIG_METADATA
       debug(2, "Stopping metadata");
       metadata_stop(); // close down the metadata pipe
+      debug(2, "Stopping metadata done");
 #endif
-      debug(2, "Stopping the activity monitor.");
-      activity_monitor_stop(0);
 
       if ((config.output) && (config.output->deinit)) {
         debug(2, "Deinitialise the audio backend.");
         config.output->deinit();
+        debug(2, "Deinitialise the audio backend done.");
       }
 
 #ifdef CONFIG_SOXR
       // be careful -- not sure if the thread can be cancelled cleanly, so wait for it to shut down
-      debug(2, "Waiting for SoXr timecheck to terminate...");
-      pthread_join(soxr_time_check_thread, NULL);
+      if (soxr_time_check_thread_started != 0) {
+        debug(2, "Waiting for SoXr timecheck to terminate...");
+        pthread_join(soxr_time_check_thread, NULL);
+        soxr_time_check_thread_started = 0;
+        debug(2, "Waiting for SoXr timecheck to terminate done");
+      }
+
 #endif
 
       if (conns)
@@ -1654,6 +1711,8 @@ void exit_function() {
 #endif
     if (config.cfg)
       config_destroy(config.cfg);
+    if (config_file_real_path)
+      free(config_file_real_path);
     if (config.appName)
       free(config.appName);
 
@@ -1661,12 +1720,12 @@ void exit_function() {
 
 #ifdef CONFIG_LIBDAEMON
     if (this_is_the_daemon_process) { // this is the daemon that is exiting
-      debug(1, "libdaemon daemon exit");
+      debug(1, "libdaemon daemon process exit");
     } else {
       if (config.daemonise)
-        debug(1, "libdaemon parent exit");
+        debug(1, "libdaemon parent process exit");
       else
-        debug(1, "exit_function libdaemon exit");
+        debug(1, "normal exit");
     }
 #else
     mdns_unregister(); // once the dacp handler is done and all player threrads are done it should
@@ -1700,13 +1759,212 @@ void termHandler(__attribute__((unused)) int k) {
   exit(EXIT_SUCCESS);
 }
 
+void _display_config(const char *filename, const int linenumber, __attribute__((unused)) int argc,
+                     __attribute__((unused)) char **argv) {
+  _inform(filename, linenumber, ">> Display Config Start.");
+
+  // see the man entry on popen
+  FILE *fp;
+  int status;
+  char result[1024];
+
+  fp = popen("uname -a 2>/dev/null", "r");
+  if (fp != NULL) {
+    if (fgets(result, 1024, fp) != NULL) {
+      _inform(filename, linenumber, "");
+      _inform(filename, linenumber, "From \"uname -a\":");
+      if (result[strlen(result) - 1] <= ' ')
+        result[strlen(result) - 1] = '\0'; // remove the last character if it's not printable
+      _inform(filename, linenumber, " %s", result);
+    }
+    status = pclose(fp);
+    if (status == -1) {
+      debug(1, "Error on pclose");
+    }
+  }
+
+  fp = popen("(cat /etc/os-release | grep PRETTY_NAME | sed 's/PRETTY_NAME=//' | sed 's/\"//g') "
+             "2>/dev/null",
+             "r");
+  if (fp != NULL) {
+    if (fgets(result, 1024, fp) != NULL) {
+      _inform(filename, linenumber, "");
+      _inform(filename, linenumber, "From /etc/os-release:");
+      if (result[strlen(result) - 1] <= ' ')
+        result[strlen(result) - 1] = '\0'; // remove the last character if it's not printable
+      _inform(filename, linenumber, " %s", result);
+    }
+    status = pclose(fp);
+    if (status == -1) {
+      debug(1, "Error on pclose");
+    }
+  }
+
+  fp = popen("cat /sys/firmware/devicetree/base/model 2>/dev/null", "r");
+  if (fp != NULL) {
+    if (fgets(result, 1024, fp) != NULL) {
+      _inform(filename, linenumber, "");
+      _inform(filename, linenumber, "From /sys/firmware/devicetree/base/model:");
+      _inform(filename, linenumber, " %s", result);
+    }
+    status = pclose(fp);
+    if (status == -1) {
+      debug(1, "Error on pclose");
+    }
+  }
+
+  char *version_string = get_version_string();
+  if (version_string) {
+    _inform(filename, linenumber, "");
+    _inform(filename, linenumber, "Shairport Sync Version String:");
+    _inform(filename, linenumber, " %s", version_string);
+    free(version_string);
+  } else {
+    debug(1, "Can't print version string!\n");
+  }
+
+  if (argc != 0) {
+    char *obfp = result;
+    int i;
+    for (i = 0; i < argc - 1; i++) {
+      snprintf(obfp, strlen(argv[i]) + 2, "%s ", argv[i]);
+      obfp += strlen(argv[i]) + 1;
+    }
+    snprintf(obfp, strlen(argv[i]) + 1, "%s", argv[i]);
+    obfp += strlen(argv[i]);
+    *obfp = 0;
+
+    _inform(filename, linenumber, "");
+    _inform(filename, linenumber, "Command Line:");
+    _inform(filename, linenumber, " %s", result);
+  }
+
+  if (config.cfg == NULL)
+    _inform(filename, linenumber, "No configuration file.");
+  else {
+    int configpipe[2];
+    if (pipe(configpipe) == 0) {
+      FILE *cw;
+      cw = fdopen(configpipe[1], "w");
+      _inform(filename, linenumber, "");
+      _inform(filename, linenumber, "Configuration File:");
+      _inform(filename, linenumber, " %s", config_file_real_path);
+      _inform(filename, linenumber, "");
+      config_write(config.cfg, cw);
+      fclose(cw);
+      // get back the raw configuration file settings text
+      FILE *cr;
+      cr = fdopen(configpipe[0], "r");
+      int i = 0;
+      int ch = 0;
+      do {
+        ch = fgetc(cr);
+        if (ch == EOF) {
+          result[i] = '\0';
+        } else {
+          result[i] = (char)ch;
+          i++;
+        }
+      } while (ch != EOF);
+      fclose(cr);
+      // debug(1,"result is \"%s\".",result);
+      // remove empty stanzas
+      char *i0 = str_replace(result, "general : \n{\n};\n", "");
+      char *i1 = str_replace(i0, "sessioncontrol : \n{\n};\n", "");
+      char *i2 = str_replace(i1, "alsa : \n{\n};\n", "");
+      char *i3 = str_replace(i2, "sndio : \n{\n};\n", "");
+      char *i4 = str_replace(i3, "pa : \n{\n};\n", "");
+      char *i5 = str_replace(i4, "jack : \n{\n};\n", "");
+      char *i6 = str_replace(i5, "pipe : \n{\n};\n", "");
+      char *i7 = str_replace(i6, "dsp : \n{\n};\n", "");
+      char *i8 = str_replace(i7, "metadata : \n{\n};\n", "");
+      char *i9 = str_replace(i8, "mqtt : \n{\n};\n", "");
+      char *i10 = str_replace(i9, "diagnostics : \n{\n};\n", "");
+      // debug(1,"i10 is \"%s\".",i10);
+
+      // free intermediate strings
+      free(i9);
+      free(i8);
+      free(i7);
+      free(i6);
+      free(i5);
+      free(i4);
+      free(i3);
+      free(i2);
+      free(i1);
+      free(i0);
+
+      // print it out
+      if (strlen(i10) == 0)
+        _inform(filename, linenumber, "The Configuration file contains no active settings.");
+      else {
+        _inform(filename, linenumber, "Configuration File Settings:");
+        char *p = i10;
+        while (*p != '\0') {
+          i = 0;
+          while ((*p != '\0') && (*p != '\n')) {
+            result[i] = *p;
+            p++;
+            i++;
+          }
+          if (i != 0) {
+            result[i] = '\0';
+            _inform(filename, linenumber, " %s", result);
+          }
+          if (*p == '\n')
+            p++;
+        }
+      }
+
+      free(i10); // free the cleaned-up configuration string
+
+      /*
+            while (fgets(result, 1024, cr) != NULL) {
+              // replace funny character at the end, if it's there
+              if (result[strlen(result) - 1] <= ' ')
+                result[strlen(result) - 1] = '\0'; // remove the last character if it's not
+         printable _inform(filename, linenumber, " %s", result);
+            }
+      */
+    } else {
+      debug(1, "Error making pipe.\n");
+    }
+  }
+  _inform(filename, linenumber, "");
+  _inform(filename, linenumber, ">> Display Config End.");
+}
+
+#define display_config(argc, argv) _display_config(__FILE__, __LINE__, argc, argv)
+
 int main(int argc, char **argv) {
+#ifdef COMPILE_FOR_OPENBSD
+  /* Start with the superset of all potentially required promises. */
+  if (pledge("stdio rpath wpath cpath dpath inet unix dns proc exec audio", NULL) == -1)
+    die("pledge: %s", strerror(errno));
+#endif
+
   memset(&config, 0, sizeof(config)); // also clears all strings, BTW
   /* Check if we are called with -V or --version parameter */
   if (argc >= 2 && ((strcmp(argv[1], "-V") == 0) || (strcmp(argv[1], "--version") == 0))) {
     print_version();
     exit(EXIT_SUCCESS);
   }
+
+  // this is a bit weird, but necessary -- basename() may modify the argument passed in
+  char *basec = strdup(argv[0]);
+  char *bname = basename(basec);
+  config.appName = strdup(bname);
+  if (config.appName == NULL)
+    die("can not allocate memory for the app name!");
+  free(basec);
+
+  strcpy(configuration_file_path, SYSCONFDIR);
+  // strcat(configuration_file_path, "/shairport-sync"); // thinking about adding a special
+  // shairport-sync directory
+  strcat(configuration_file_path, "/");
+  strcat(configuration_file_path, config.appName);
+  strcat(configuration_file_path, ".conf");
+  config.configfile = configuration_file_path;
 
 #ifdef CONFIG_AIRPLAY_2
 #if LIBAVCODEC_VERSION_INT < AV_VERSION_INT(53, 10, 0)
@@ -1734,16 +1992,8 @@ int main(int argc, char **argv) {
   pid = getpid();
   config.log_fd = -1;
   conns = NULL; // no connections active
-  memset((void *)&main_thread_id, 0, sizeof(main_thread_id));
   ns_time_at_startup = get_absolute_time_in_ns();
   ns_time_at_last_debug_message = ns_time_at_startup;
-  // this is a bit weird, but necessary -- basename() may modify the argument passed in
-  char *basec = strdup(argv[0]);
-  char *bname = basename(basec);
-  config.appName = strdup(bname);
-  if (config.appName == NULL)
-    die("can not allocate memory for the app name!");
-  free(basec);
 
 #ifdef CONFIG_LIBDAEMON
   daemon_set_verbosity(LOG_DEBUG);
@@ -1791,29 +2041,21 @@ int main(int argc, char **argv) {
     config.output_name = first_backend_name;
   }
 
-  strcpy(configuration_file_path, SYSCONFDIR);
-  // strcat(configuration_file_path, "/shairport-sync"); // thinking about adding a special
-  // shairport-sync directory
-  strcat(configuration_file_path, "/");
-  strcat(configuration_file_path, config.appName);
-  strcat(configuration_file_path, ".conf");
-  config.configfile = configuration_file_path;
-
   // config.statistics_requested = 0; // don't print stats in the log
   // config.userSuppliedLatency = 0; // zero means none supplied
 
   config.debugger_show_file_and_line =
       1; // by default, log the file and line of the originating message
   config.debugger_show_relative_time =
-      1;                         // by default, log the  time back to the previous debug message
-  config.resyncthreshold = 0.05; // 50 ms
-  config.timeout = 120; // this number of seconds to wait for [more] audio before switching to idle.
-  config.tolerance =
-      0.002; // this number of seconds of timing error before attempting to correct it.
+      1;                // by default, log the time back to the previous debug message
+  config.timeout = 120; // wait this number of seconds to wait for a dropped RTSP connection to come back before declaring it lost.
   config.buffer_start_fill = 220;
 
+  config.resync_threshold = 0.050;   // default
+  config.resync_recovery_time = 0.1; // drop this amount of frames following the resync delay.
+  config.tolerance = 0.002;
+
 #ifdef CONFIG_AIRPLAY_2
-  config.timeout = 0; // disable watchdog
   config.port = 7000;
 #else
   config.port = 5000;
@@ -1873,11 +2115,26 @@ int main(int argc, char **argv) {
   // parse arguments into config -- needed to locate pid_dir
   int audio_arg = parse_options(argc, argv);
 
+#ifdef COMPILE_FOR_OPENBSD
+  /* Any command to be executed at runtime? */
+  int run_cmds = config.cmd_active_start != NULL || config.cmd_active_stop != NULL ||
+                 config.cmd_set_volume != NULL || config.cmd_start != NULL ||
+                 config.cmd_stop != NULL;
+#endif
+
   // mDNS supports maximum of 63-character names (we append 13).
   if (strlen(config.service_name) > 50) {
     warn("The service name \"%s\" is too long (max 50 characters) and has been truncated.",
          config.service_name);
     config.service_name[50] = '\0'; // truncate it and carry on...
+  }
+
+  if (display_config_selected != 0) {
+    display_config(argc, argv);
+    if (argc == 2) {
+      inform(">> Goodbye!");
+      exit(EXIT_SUCCESS);
+    }
   }
 
   /* Check if we are called with -k or --kill option */
@@ -1889,23 +2146,18 @@ int main(int argc, char **argv) {
     /* Check if the new function daemon_pid_file_kill_wait() is available, if it is, use it. */
     if ((ret = daemon_pid_file_kill_wait(SIGTERM, 5)) < 0) {
       if (errno == ENOENT)
-        daemon_log(LOG_WARNING, "Failed to kill %s daemon: PID file not found.", config.appName);
+        warn("Failed to kill the %s daemon. The PID file was not found.", config.appName);
+      // daemon_log(LOG_WARNING, "Failed to kill %s daemon: PID file not found.", config.appName);
       else
-        daemon_log(LOG_WARNING, "Failed to kill %s daemon: \"%s\", errno %u.", config.appName,
-                   strerror(errno), errno);
-    } else {
-      // debug(1,"Successfully killed the %s daemon.", config.appName);
-      if (daemon_pid_file_remove() == 0)
-        debug(2, "killed the %s daemon.", config.appName);
-      else
-        daemon_log(LOG_WARNING,
-                   "killed the %s daemon, but cannot remove old PID file: \"%s\", errno %u.",
-                   config.appName, strerror(errno), errno);
+        warn("Failed to kill the %s daemon. Error: \"%s\", errno %u.", config.appName,
+             strerror(errno), errno);
+      // daemon_log(LOG_WARNING, "Failed to kill %s daemon: \"%s\", errno %u.", config.appName,
+      //            strerror(errno), errno);
     }
     return ret < 0 ? 1 : 0;
 #else
-    fprintf(stderr, "%s was built without libdaemon, so does not support the -k or --kill option\n",
-            config.appName);
+    warn("%s was built without libdaemon, so it does not support the -k or --kill option.",
+         config.appName);
     return 1;
 #endif
   }
@@ -1913,7 +2165,8 @@ int main(int argc, char **argv) {
 #ifdef CONFIG_LIBDAEMON
   /* If we are going to daemonise, check that the daemon is not running already.*/
   if ((config.daemonise) && ((pid = daemon_pid_file_is_running()) >= 0)) {
-    daemon_log(LOG_ERR, "The %s daemon is already running as PID %u", config.appName, pid);
+    warn("The %s deamon is already running with process ID (PID) %u.", config.appName, pid);
+    // daemon_log(LOG_ERR, "The %s daemon is already running as PID %u", config.appName, pid);
     return 1;
   }
 
@@ -1922,8 +2175,7 @@ int main(int argc, char **argv) {
   if (config.daemonise) {
     /* Prepare for return value passing from the initialization procedure of the daemon process */
     if (daemon_retval_init() < 0) {
-      daemon_log(LOG_ERR, "Failed to create pipe.");
-      return 1;
+      die("Failed to create pipe.");
     }
 
     /* Do the fork */
@@ -1938,43 +2190,38 @@ int main(int argc, char **argv) {
 
       /* Wait for 20 seconds for the return value passed from the daemon process */
       if ((ret = daemon_retval_wait(20)) < 0) {
-        daemon_log(LOG_ERR, "Could not receive return value from daemon process: %s",
-                   strerror(errno));
-        return 255;
+        die("Could not receive return value from daemon process: %s", strerror(errno));
       }
 
       switch (ret) {
       case 0:
         break;
       case 1:
-        daemon_log(
-            LOG_ERR,
-            "the %s daemon failed to launch: could not close open file descriptors after forking.",
-            config.appName);
+        warn("The %s daemon failed to launch: could not close open file descriptors after forking.",
+             config.appName);
         break;
       case 2:
-        daemon_log(LOG_ERR, "the %s daemon failed to launch: could not create PID file.",
-                   config.appName);
+        warn("The %s daemon failed to launch: could not create PID file.", config.appName);
         break;
       case 3:
-        daemon_log(LOG_ERR,
-                   "the %s daemon failed to launch: could not create or access PID directory.",
-                   config.appName);
+        warn("The %s daemon failed to launch: could not create or access PID directory.",
+             config.appName);
         break;
       default:
-        daemon_log(LOG_ERR, "the %s daemon failed to launch, error %i.", config.appName, ret);
+        warn("The %s daemon failed to launch, error %i.", config.appName, ret);
       }
       return ret;
     } else { /* pid == 0 means we are the daemon */
 
-      this_is_the_daemon_process = 1; //
+      this_is_the_daemon_process = 1;
+      if (log_to_default != 0) // if a specific logging mode has not been selected
+        log_to_syslog();       // automatically send logs to the daemon_log
 
       /* Close FDs */
       if (daemon_close_all(-1) < 0) {
-        daemon_log(LOG_ERR, "Failed to close all file descriptors: %s", strerror(errno));
+        warn("Failed to close all file descriptors while daemonising. Error: %s", strerror(errno));
         /* Send the error condition to the parent process */
         daemon_retval_send(1);
-
         daemon_signal_done();
         return 0;
       }
@@ -1982,19 +2229,20 @@ int main(int argc, char **argv) {
       /* Create the PID file if required */
       if (config.daemonise_store_pid) {
         /* Create the PID directory if required -- we don't really care about the result */
-        printf("PID directory is \"%s\".", config.computed_piddir);
+        debug(1, "PID directory is \"%s\".", config.computed_piddir);
         int result = mkpath(config.computed_piddir, 0700);
         if ((result != 0) && (result != -EEXIST)) {
           // error creating or accessing the PID file directory
+          warn("Failed to create the directory \"%s\" for the PID file. Error: %s.",
+               config.computed_piddir, strerror(errno));
           daemon_retval_send(3);
-
           daemon_signal_done();
           return 0;
         }
 
         if (daemon_pid_file_create() < 0) {
-          daemon_log(LOG_ERR, "Could not create PID file (%s).", strerror(errno));
-
+          // daemon_log(LOG_ERR, "Could not create PID file (%s).", strerror(errno));
+          warn("Failed to create the PID file. Error: %s.", strerror(errno));
           daemon_retval_send(2);
           daemon_signal_done();
           return 0;
@@ -2009,6 +2257,16 @@ int main(int argc, char **argv) {
 
 #endif
 
+#ifdef COMPILE_FOR_OPENBSD
+  /* Past daemon(3)'s double fork(2). */
+
+  /* Only user-defined commands are executed. */
+  if (!run_cmds)
+    /* Drop "proc exec". */
+    if (pledge("stdio rpath wpath cpath dpath inet unix dns audio", NULL) == -1)
+      die("pledge: %s", strerror(errno));
+#endif
+
 #ifdef CONFIG_AIRPLAY_2
 
   if (has_fltp_capable_aac_decoder() == 0) {
@@ -2021,10 +2279,10 @@ int main(int argc, char **argv) {
   apfh = apfh >> 32;
   uint32_t apf32 = apf;
   uint32_t apfh32 = apfh;
-  debug(1, "startup in AirPlay 2 mode, with features 0x%" PRIx32 ",0x%" PRIx32 " on device \"%s\".",
+  debug(1, "Startup in AirPlay 2 mode, with features 0x%" PRIx32 ",0x%" PRIx32 " on device \"%s\".",
         apf32, apfh32, config.airplay_device_id);
 #else
-  debug(1, "startup in classic Airplay (aka \"AirPlay 1\") mode.");
+  debug(1, "Startup in classic Airplay (aka \"AirPlay 1\") mode.");
 #endif
 
   // control-c (SIGINT) cleanly
@@ -2053,10 +2311,6 @@ int main(int argc, char **argv) {
     exit(1);
   }
 
-  main_thread_id = pthread_self();
-  if (!main_thread_id)
-    debug(1, "Main thread is set up to be NULL!");
-
   // make sure the program can create files that group and world can read
   umask(S_IWGRP | S_IWOTH);
 
@@ -2064,42 +2318,33 @@ int main(int argc, char **argv) {
 
   char *version_dbs = get_version_string();
   if (version_dbs) {
-    debug(1, "software version: \"%s\"", version_dbs);
+    debug(1, "Version String: \"%s\"", version_dbs);
     free(version_dbs);
   } else {
-    debug(1, "can't print the version information!");
+    debug(1, "Can't print the version information!");
   }
 
-  debug(1, "log verbosity is %d.", debuglev);
+  // print command line
 
-  config.output = audio_get_output(config.output_name);
-  if (!config.output) {
-    die("Invalid audio backend \"%s\" selected!",
-        config.output_name == NULL ? "<unspecified>" : config.output_name);
-  }
-  config.output->init(argc - audio_arg, argv + audio_arg);
-
-  // pthread_cleanup_push(main_cleanup_handler, NULL);
-
-  // daemon_log(LOG_NOTICE, "startup");
-
-  switch (config.endianness) {
-  case SS_LITTLE_ENDIAN:
-    debug(2, "The processor is running little-endian.");
-    break;
-  case SS_BIG_ENDIAN:
-    debug(2, "The processor is running big-endian.");
-    break;
-  case SS_PDP_ENDIAN:
-    debug(2, "The processor is running pdp-endian.");
-    break;
+  if (argc != 0) {
+    char result[1024];
+    char *obfp = result;
+    int i;
+    for (i = 0; i < argc - 1; i++) {
+      snprintf(obfp, strlen(argv[i]) + 2, "%s ", argv[i]);
+      obfp += strlen(argv[i]) + 1;
+    }
+    snprintf(obfp, strlen(argv[i]) + 1, "%s", argv[i]);
+    obfp += strlen(argv[i]);
+    *obfp = 0;
+    debug(1, "Command Line: \"%s\".", result);
   }
 
 #ifdef CONFIG_AIRPLAY_2
   if (sodium_init() < 0) {
     debug(1, "Can't initialise libsodium!");
   } else {
-    debug(1, "libsodium initialised.");
+    debug(2, "libsodium initialised.");
   }
 
   // this code is based on
@@ -2124,7 +2369,54 @@ int main(int argc, char **argv) {
   /* Tell Libgcrypt that initialization has completed. */
   gcry_control(GCRYCTL_INITIALIZATION_FINISHED, 0);
 
+  debug(2, "libgcrypt initialised.");
+
 #endif
+
+  debug(1, "Log Verbosity is %d.", debuglev);
+
+  config.output = audio_get_output(config.output_name);
+  if (!config.output) {
+    die("Invalid audio backend \"%s\" selected!",
+        config.output_name == NULL ? "<unspecified>" : config.output_name);
+  }
+  config.output->init(argc - audio_arg, argv + audio_arg);
+
+#ifdef COMPILE_FOR_OPENBSD
+  /* Past first and last sio_open(3), sndio(7) only needs "audio". */
+
+#ifdef CONFIG_METADATA
+  /* Only coverart cache is created.
+   * Only metadata pipe is special. */
+  if (!config.metadata_enabled)
+#endif
+  {
+    /* Drop "cpath dpath". */
+    if (run_cmds) {
+      if (pledge("stdio rpath wpath inet unix dns proc exec audio", NULL) == -1)
+        die("pledge: %s", strerror(errno));
+    } else {
+      if (pledge("stdio rpath wpath inet unix dns audio", NULL) == -1)
+        die("pledge: %s", strerror(errno));
+    }
+  }
+#endif
+
+  // pthread_cleanup_push(main_cleanup_handler, NULL);
+
+  // daemon_log(LOG_NOTICE, "startup");
+
+  switch (config.endianness) {
+  case SS_LITTLE_ENDIAN:
+    debug(2, "The processor is running little-endian.");
+    break;
+  case SS_BIG_ENDIAN:
+    debug(2, "The processor is running big-endian.");
+    break;
+  case SS_PDP_ENDIAN:
+    debug(2, "The processor is running pdp-endian.");
+    break;
+  }
 
   /* Mess around with the latency options */
   // Basically, we expect the source to set the latency and add a fixed offset of 11025 frames to
@@ -2149,7 +2441,7 @@ int main(int argc, char **argv) {
   }
 
   /* Print out options */
-  debug(1, "disable resend requests is %s.", config.disable_resend_requests ? "on" : "off");
+  debug(1, "disable_resend_requests is %s.", config.disable_resend_requests ? "on" : "off");
   debug(1,
         "diagnostic_drop_packet_fraction is %f. A value of 0.0 means no packets will be dropped "
         "deliberately.",
@@ -2182,11 +2474,21 @@ int main(int argc, char **argv) {
         : config.packet_stuffing == ST_soxr ? "soxr"
                                             : "auto");
   debug(1, "interpolation soxr_delay_threshold is %d.", config.soxr_delay_threshold);
-  debug(1, "resync time is %f seconds.", config.resyncthreshold);
+  debug(1, "resync time is %f seconds.", config.resync_threshold);
+  debug(1, "resync recovery time is %f seconds.", config.resync_recovery_time);
   debug(1, "allow a session to be interrupted: %d.", config.allow_session_interruption);
   debug(1, "busy timeout time is %d.", config.timeout);
   debug(1, "drift tolerance is %f seconds.", config.tolerance);
-  debug(1, "password is \"%s\".", strnull(config.password));
+  debug(1, "password is %s.", config.password == NULL ? "not set" : "set (omitted)");
+  debug(1, "default airplay volume is: %.6f.", config.default_airplay_volume);
+  debug(1, "high threshold airplay volume is: %.6f.", config.high_threshold_airplay_volume);
+  if (config.limit_to_high_volume_threshold_time_in_minutes == 0)
+    debug(1, "check for higher-than-threshold volume for new play session is disabled.");
+  else
+    debug(1,
+          "suggest default airplay volume for new play sessions instead of higher-than-threshold "
+          "airplay volume after: %d minutes.",
+          config.limit_to_high_volume_threshold_time_in_minutes);
   debug(1, "ignore_volume_control is %d.", config.ignore_volume_control);
   if (config.volume_max_db_set)
     debug(1, "volume_max_db is %d.", config.volume_max_db);
@@ -2239,7 +2541,7 @@ int main(int argc, char **argv) {
 #ifdef CONFIG_METADATA
   debug(1, "metadata enabled is %d.", config.metadata_enabled);
   debug(1, "metadata pipename is \"%s\".", config.metadata_pipename);
-  debug(1, "metadata socket address is \"%s\" port %d.", config.metadata_sockaddr,
+  debug(1, "metadata socket address is \"%s\" port %d.", strnull(config.metadata_sockaddr),
         config.metadata_sockport);
   debug(1, "metadata socket packet size is \"%d\".", config.metadata_sockmsglength);
   debug(1, "get-coverart is %d.", config.get_coverart);
@@ -2252,6 +2554,7 @@ int main(int argc, char **argv) {
   debug(1, "mqtt will%s publish parsed metadata.", config.mqtt_publish_parsed ? "" : " not");
   debug(1, "mqtt will%s publish cover Art.", config.mqtt_publish_cover ? "" : " not");
   debug(1, "mqtt remote control is %sabled.", config.mqtt_enable_remote ? "en" : "dis");
+  debug(1, "mqtt autodiscovery is %sabled.", config.mqtt_enable_autodiscovery ? "en" : "dis");
 #endif
 
 #ifdef CONFIG_CONVOLUTION
@@ -2265,36 +2568,53 @@ int main(int argc, char **argv) {
 
 #ifdef CONFIG_SOXR
   pthread_create(&soxr_time_check_thread, NULL, &soxr_time_check, NULL);
+  soxr_time_check_thread_started = 1;
 #endif
 
-  /*
-    uint8_t ap_md5[16];
+  // In AirPlay 2 mode, the AP1 prefix is the same as the device ID less the colons
+  // In AirPlay 1 mode, the AP1 prefix is calculated by hashing the service name.
+#ifndef CONFIG_AIRPLAY_2
 
-  #ifdef CONFIG_OPENSSL
-    MD5_CTX ctx;
-    MD5_Init(&ctx);
-    MD5_Update(&ctx, config.service_name, strlen(config.service_name));
-    MD5_Final(ap_md5, &ctx);
-  #endif
+  uint8_t ap_md5[16];
 
-  #ifdef CONFIG_MBEDTLS
-  #if MBEDTLS_VERSION_MINOR >= 7
-    mbedtls_md5_context tctx;
-    mbedtls_md5_starts_ret(&tctx);
-    mbedtls_md5_update_ret(&tctx, (unsigned char *)config.service_name,
-  strlen(config.service_name)); mbedtls_md5_finish_ret(&tctx, ap_md5); #else mbedtls_md5_context
-  tctx; mbedtls_md5_starts(&tctx); mbedtls_md5_update(&tctx, (unsigned char *)config.service_name,
-  strlen(config.service_name)); mbedtls_md5_finish(&tctx, ap_md5); #endif #endif
+  // debug(1, "size of hw_addr is %u.", sizeof(config.hw_addr));
+#ifdef CONFIG_OPENSSL
+  EVP_MD_CTX *mdctx = EVP_MD_CTX_new();
+  EVP_DigestInit_ex(mdctx, EVP_md5(), NULL);
+  EVP_DigestUpdate(mdctx, config.service_name, strlen(config.service_name));
+  EVP_DigestUpdate(mdctx, config.hw_addr, sizeof(config.hw_addr));
+  unsigned int md5_digest_len = EVP_MD_size(EVP_md5());
+  EVP_DigestFinal_ex(mdctx, ap_md5, &md5_digest_len);
+  EVP_MD_CTX_free(mdctx);
 
-  #ifdef CONFIG_POLARSSL
-    md5_context tctx;
-    md5_starts(&tctx);
-    md5_update(&tctx, (unsigned char *)config.service_name, strlen(config.service_name));
-    md5_finish(&tctx, ap_md5);
-  #endif
+#endif
 
-    memcpy(config.hw_addr, ap_md5, sizeof(config.hw_addr));
-  */
+#ifdef CONFIG_MBEDTLS
+#if MBEDTLS_VERSION_MINOR >= 7
+  mbedtls_md5_context tctx;
+  mbedtls_md5_starts_ret(&tctx);
+  mbedtls_md5_update_ret(&tctx, (unsigned char *)config.service_name, strlen(config.service_name));
+  mbedtls_md5_update_ret(&tctx, (unsigned char *)config.hw_addr, sizeof(config.hw_addr));
+  mbedtls_md5_finish_ret(&tctx, ap_md5);
+#else
+  mbedtls_md5_context tctx;
+  mbedtls_md5_starts(&tctx);
+  mbedtls_md5_update(&tctx, (unsigned char *)config.service_name, strlen(config.service_name));
+  mbedtls_md5_update(&tctx, (unsigned char *)config.hw_addr, sizeof(config.hw_addr));
+  mbedtls_md5_finish(&tctx, ap_md5);
+#endif
+#endif
+
+#ifdef CONFIG_POLARSSL
+  md5_context tctx;
+  md5_starts(&tctx);
+  md5_update(&tctx, (unsigned char *)config.service_name, strlen(config.service_name));
+  md5_update(&tctx, (unsigned char *)config.hw_addr, sizeof(config.hw_addr));
+  md5_finish(&tctx, ap_md5);
+#endif
+
+  memcpy(config.ap1_prefix, ap_md5, sizeof(config.ap1_prefix));
+#endif
 
 #ifdef CONFIG_METADATA
   metadata_init(); // create the metadata pipe if necessary
@@ -2329,25 +2649,60 @@ int main(int argc, char **argv) {
 #endif
 
 #ifdef CONFIG_AIRPLAY_2
-  ptp_send_control_message_string("T"); // get nqptp to create the named shm interface
-  int ptp_check_times = 0;
-  const int ptp_wait_interval_us = 5000;
-  // wait for up to ten seconds for NQPTP to come online
+  ptp_send_control_message_string(
+      "T"); // send this message to get nqptp to create the named shm interface
+  uint64_t nqptp_start_waiting_time = get_absolute_time_in_ns();
+  int continue_waiting = 0;
+  int response = 0;
+  int64_t time_spent_waiting = 0;
   do {
-    ptp_send_control_message_string("T"); // get nqptp to create the named shm interface
-    usleep(ptp_wait_interval_us);
-    ptp_check_times++;
-  } while ((ptp_shm_interface_open() != 0) &&
-           (ptp_check_times < (10000000 / ptp_wait_interval_us)));
+    continue_waiting = 0;
+    response = ptp_shm_interface_open();
+    if ((response == -1) && (errno == ENOENT)) {
+      time_spent_waiting = get_absolute_time_in_ns() - nqptp_start_waiting_time;
+      if (time_spent_waiting < 10000000000L) {
+        continue_waiting = 1;
+        usleep(50000);
+      }
+    }
+  } while (continue_waiting != 0);
 
-  if (ptp_shm_interface_open() != 0) {
-    die("Can't access NQPTP! Is it installed and running?");
-  } else {
-    if (ptp_check_times == 1)
-      debug(1, "NQPTP is online.");
-    else
-      debug(1, "NQPTP is online after %u microseconds.", ptp_check_times * ptp_wait_interval_us);
+  if ((response == -1) && (errno == ENOENT)) {
+    die("Shairport Sync can not find the nqptp service on this system.  Is nqptp installed and "
+        "running?");
+  } else if ((response == -1) && (errno == EACCES)) {
+    die("Shairport Sync must have read access to the nqptp shared memory file in /dev/shm/.");
+  } else if (response != 0) {
+    die("an error occurred accessing the nqptp service.");
   }
+
+  int ptp_clock_version = ptp_get_clock_version();
+  if (ptp_clock_version == 0) {
+    die("The nqptp service on this system, which is required for Shairport Sync to operate, does "
+        "not seem to be initialised.");
+  } else if (ptp_clock_version < NQPTP_SHM_STRUCTURES_VERSION) {
+    die("The nqptp service (SMI Version %d) on this system is too old for this version of "
+        "Shairport Sync, which requires SMI Version %d. Please update.",
+        ptp_clock_version, NQPTP_SHM_STRUCTURES_VERSION);
+  } else if (ptp_clock_version > NQPTP_SHM_STRUCTURES_VERSION) {
+    die("This version of Shairport Sync (SMI Version %d) is too old for the version of nqptp (SMI "
+        "Version %d) on this system. Please update.",
+        NQPTP_SHM_STRUCTURES_VERSION, ptp_clock_version);
+  }
+
+  if (time_spent_waiting == 0)
+    debug(1, "NQPTP is online.");
+  else
+    debug(1, "NQPTP came online after %.3f milliseconds.", 0.000001 * time_spent_waiting);
+#endif
+
+#ifdef CONFIG_METADATA
+  send_ssnc_metadata('svna', config.service_name, strlen(config.service_name), 1);
+  char buffer[256] = "";
+  snprintf(buffer, sizeof(buffer), "%d", config.output_rate);
+  send_ssnc_metadata('ofps', buffer, strlen(buffer), 1);
+  snprintf(buffer, sizeof(buffer), "%s", sps_format_description_string(config.output_format));
+  send_ssnc_metadata('ofmt', buffer, strlen(buffer), 1);
 #endif
 
   activity_monitor_start(); // not yet for AP2

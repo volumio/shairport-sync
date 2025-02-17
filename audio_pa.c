@@ -1,6 +1,6 @@
 /*
  * Asynchronous PulseAudio Backend. This file is part of Shairport Sync.
- * Copyright (c) Mike Brady 2017
+ * Copyright (c) Mike Brady 2017-2023
  * All rights reserved.
  *
  * Permission is hereby granted, free of charge, to any person
@@ -41,33 +41,119 @@
 #define RATE 44100
 
 // Four seconds buffer -- should be plenty
-#define buffer_allocation 44100 * 4 * 2 * 2
+#define buffer_allocation RATE * 4 * 2 * 2
 
 static pthread_mutex_t buffer_mutex = PTHREAD_MUTEX_INITIALIZER;
-
-/*
-static struct {
-  char *server;
-  char *sink;
-  char *service_name;
-} pulse_options = {.server = NULL, .sink = NULL, .service_name = NULL};
-*/
 
 pa_threaded_mainloop *mainloop;
 pa_mainloop_api *mainloop_api;
 pa_context *context;
 pa_stream *stream;
-char *audio_lmb, *audio_umb, *audio_toq, *audio_eoq;
-size_t audio_size = buffer_allocation;
-size_t audio_occupancy;
+static char *audio_lmb, *audio_umb, *audio_toq, *audio_eoq;
+static size_t audio_size = buffer_allocation;
+static size_t audio_occupancy;
 
 void context_state_cb(pa_context *context, void *mainloop);
 void stream_state_cb(pa_stream *s, void *mainloop);
 void stream_success_cb(pa_stream *stream, int success, void *userdata);
 void stream_write_cb(pa_stream *stream, size_t requested_bytes, void *userdata);
 
-static int init(__attribute__((unused)) int argc, __attribute__((unused)) char **argv) {
+int status_error_notifications = 0;
+static void check_pa_stream_status(pa_stream *p, const char *message) {
+  if (status_error_notifications < 10) {
+    if (p == NULL) {
+      warn("%s No pulseaudio stream!", message);
+      status_error_notifications++;
+    } else {
+      status_error_notifications++; // assume an error
+      switch (pa_stream_get_state(p)) {
+      case PA_STREAM_UNCONNECTED:
+        warn("%s Pulseaudio stream unconnected!", message);
+        break;
+      case PA_STREAM_CREATING:
+        warn("%s Pulseaudio stream being created!", message);
+        break;
+      case PA_STREAM_READY:
+        status_error_notifications--; // no error
+        break;
+      case PA_STREAM_FAILED:
+        warn("%s Pulseaudio stream failed!", message);
+        break;
+      case PA_STREAM_TERMINATED:
+        warn("%s Pulseaudio stream unexpectedly terminated!", message);
+        break;
+      default:
+        warn("%s Pulseaudio stream in unexpected state %d!", message, pa_stream_get_state(p));
+        break;
+      }
+    }
+  }
+}
 
+static void connect_stream() {
+  // debug(1, "connect_stream");
+  uint32_t buffer_size_in_bytes = (uint32_t)2 * 2 * RATE * 0.1; // hard wired in here
+  // debug(1, "pa_buffer size is %u bytes.", buffer_size_in_bytes);
+
+  pa_threaded_mainloop_lock(mainloop);
+  // Create a playback stream
+  pa_sample_spec sample_specifications;
+  sample_specifications.format = FORMAT;
+  sample_specifications.rate = RATE;
+  sample_specifications.channels = 2;
+
+  pa_channel_map map;
+  pa_channel_map_init_stereo(&map);
+
+  stream = pa_stream_new(context, "Playback", &sample_specifications, &map);
+  pa_stream_set_state_callback(stream, stream_state_cb, mainloop);
+  pa_stream_set_write_callback(stream, stream_write_cb, mainloop);
+  //    pa_stream_set_latency_update_callback(stream, stream_latency_cb, mainloop);
+
+  // recommended settings, i.e. server uses sensible values
+  pa_buffer_attr buffer_attr;
+  buffer_attr.maxlength = (uint32_t)-1;
+  buffer_attr.tlength = buffer_size_in_bytes;
+  buffer_attr.prebuf = (uint32_t)0;
+  buffer_attr.minreq = (uint32_t)-1;
+
+  pa_stream_flags_t stream_flags;
+  stream_flags = PA_STREAM_START_CORKED | PA_STREAM_INTERPOLATE_TIMING | PA_STREAM_NOT_MONOTONIC |
+                 PA_STREAM_AUTO_TIMING_UPDATE | PA_STREAM_ADJUST_LATENCY;
+
+  int connect_result;
+
+  if (config.pa_sink) {
+    // Connect stream to the sink specified in the config
+    connect_result =
+        pa_stream_connect_playback(stream, config.pa_sink, &buffer_attr, stream_flags, NULL, NULL);
+  } else {
+    // Connect stream to the default audio output sink
+    connect_result =
+        pa_stream_connect_playback(stream, NULL, &buffer_attr, stream_flags, NULL, NULL);
+  }
+
+  if (connect_result != 0)
+    die("could not connect to the pulseaudio playback stream -- the error message is \"%s\".",
+        pa_strerror(pa_context_errno(context)));
+
+  // Wait for the stream to be ready
+  for (;;) {
+    pa_stream_state_t stream_state = pa_stream_get_state(stream);
+    if (!PA_STREAM_IS_GOOD(stream_state))
+      die("stream state is no longer good while waiting for stream to become ready -- the error "
+          "message is \"%s\".",
+          pa_strerror(pa_context_errno(context)));
+    if (stream_state == PA_STREAM_READY)
+      break;
+    pa_threaded_mainloop_wait(mainloop);
+  }
+
+  pa_threaded_mainloop_unlock(mainloop);
+}
+
+static int init(__attribute__((unused)) int argc, __attribute__((unused)) char **argv) {
+  // debug(1, "pa_init");
   // set up default values first
   config.audio_backend_buffer_desired_length = 0.35;
   config.audio_backend_buffer_interpolation_threshold_in_seconds =
@@ -148,11 +234,14 @@ static int init(__attribute__((unused)) int argc, __attribute__((unused)) char *
   }
 
   pa_threaded_mainloop_unlock(mainloop);
-
+  connect_stream();
+  check_pa_stream_status(stream, "audio_pa initialisation.");
   return 0;
 }
 
 static void deinit(void) {
+  check_pa_stream_status(stream, "audio_pa deinitialisation.");
+  pa_stream_disconnect(stream);
   pa_threaded_mainloop_stop(mainloop);
   pa_threaded_mainloop_free(mainloop);
   // debug(1, "pa deinit done");
@@ -160,67 +249,7 @@ static void deinit(void) {
 
 static void start(__attribute__((unused)) int sample_rate,
                   __attribute__((unused)) int sample_format) {
-
-  uint32_t buffer_size_in_bytes = (uint32_t)2 * 2 * RATE * 0.1; // hard wired in here
-  // debug(1, "pa_buffer size is %u bytes.", buffer_size_in_bytes);
-
-  pa_threaded_mainloop_lock(mainloop);
-  // Create a playback stream
-  pa_sample_spec sample_specifications;
-  sample_specifications.format = FORMAT;
-  sample_specifications.rate = RATE;
-  sample_specifications.channels = 2;
-
-  pa_channel_map map;
-  pa_channel_map_init_stereo(&map);
-
-  stream = pa_stream_new(context, "Playback", &sample_specifications, &map);
-  pa_stream_set_state_callback(stream, stream_state_cb, mainloop);
-  pa_stream_set_write_callback(stream, stream_write_cb, mainloop);
-  //    pa_stream_set_latency_update_callback(stream, stream_latency_cb, mainloop);
-
-  // recommended settings, i.e. server uses sensible values
-  pa_buffer_attr buffer_attr;
-  buffer_attr.maxlength = (uint32_t)-1;
-  buffer_attr.tlength = buffer_size_in_bytes;
-  buffer_attr.prebuf = (uint32_t)0;
-  buffer_attr.minreq = (uint32_t)-1;
-
-  // Settings copied as per the chromium browser source
-  pa_stream_flags_t stream_flags;
-  stream_flags = PA_STREAM_START_CORKED | PA_STREAM_INTERPOLATE_TIMING | PA_STREAM_NOT_MONOTONIC |
-                 //        PA_STREAM_AUTO_TIMING_UPDATE;
-                 PA_STREAM_AUTO_TIMING_UPDATE | PA_STREAM_ADJUST_LATENCY;
-
-  int connect_result;
-
-  if (config.pa_sink) {
-    // Connect stream to the sink specified in the config
-    connect_result =
-        pa_stream_connect_playback(stream, config.pa_sink, &buffer_attr, stream_flags, NULL, NULL);
-  } else {
-    // Connect stream to the default audio output sink
-    connect_result =
-        pa_stream_connect_playback(stream, NULL, &buffer_attr, stream_flags, NULL, NULL);
-  }
-
-  if (connect_result != 0)
-    die("could not connect to the pulseaudio playback stream -- the error message is \"%s\".",
-        pa_strerror(pa_context_errno(context)));
-
-  // Wait for the stream to be ready
-  for (;;) {
-    pa_stream_state_t stream_state = pa_stream_get_state(stream);
-    if (!PA_STREAM_IS_GOOD(stream_state))
-      die("stream state is no longer good while waiting for stream to become ready -- the error "
-          "message is \"%s\".",
-          pa_strerror(pa_context_errno(context)));
-    if (stream_state == PA_STREAM_READY)
-      break;
-    pa_threaded_mainloop_wait(mainloop);
-  }
-
-  pa_threaded_mainloop_unlock(mainloop);
+  check_pa_stream_status(stream, "audio_pa start.");
 }
 
 static int play(void *buf, int samples, __attribute__((unused)) int sample_type,
@@ -228,35 +257,44 @@ static int play(void *buf, int samples, __attribute__((unused)) int sample_type,
                 __attribute__((unused)) uint64_t playtime) {
   // debug(1,"pa_play of %d samples.",samples);
   // copy the samples into the queue
+  check_pa_stream_status(stream, "audio_pa play.");
   size_t bytes_to_transfer = samples * 2 * 2;
-  size_t space_to_end_of_buffer = audio_umb - audio_eoq;
-  if (space_to_end_of_buffer >= bytes_to_transfer) {
-    memcpy(audio_eoq, buf, bytes_to_transfer);
+
+  pthread_mutex_lock(&buffer_mutex);
+  size_t bytes_available = audio_size - audio_occupancy;
+  if (bytes_available < bytes_to_transfer)
+    bytes_to_transfer = bytes_available;
+  if (bytes_to_transfer > 0) {
+    size_t space_to_end_of_buffer = audio_umb - audio_eoq;
+    if (space_to_end_of_buffer >= bytes_to_transfer) {
+      memcpy(audio_eoq, buf, bytes_to_transfer);
+      audio_eoq += bytes_to_transfer;
+    } else {
+      memcpy(audio_eoq, buf, space_to_end_of_buffer);
+      buf += space_to_end_of_buffer;
+      memcpy(audio_lmb, buf, bytes_to_transfer - space_to_end_of_buffer);
+      audio_eoq = audio_lmb + bytes_to_transfer - space_to_end_of_buffer;
+    }
     audio_occupancy += bytes_to_transfer;
-    pthread_mutex_lock(&buffer_mutex);
-    audio_eoq += bytes_to_transfer;
-    pthread_mutex_unlock(&buffer_mutex);
-  } else {
-    memcpy(audio_eoq, buf, space_to_end_of_buffer);
-    buf += space_to_end_of_buffer;
-    memcpy(audio_lmb, buf, bytes_to_transfer - space_to_end_of_buffer);
-    pthread_mutex_lock(&buffer_mutex);
-    audio_occupancy += bytes_to_transfer;
-    pthread_mutex_unlock(&buffer_mutex);
-    audio_eoq = audio_lmb + bytes_to_transfer - space_to_end_of_buffer;
   }
+
   if ((audio_occupancy >= 11025 * 2 * 2) && (pa_stream_is_corked(stream))) {
     // debug(1,"Uncorked");
+    pthread_mutex_unlock(&buffer_mutex);
     pa_threaded_mainloop_lock(mainloop);
     pa_stream_cork(stream, 0, stream_success_cb, mainloop);
     pa_threaded_mainloop_unlock(mainloop);
+  } else {
+    pthread_mutex_unlock(&buffer_mutex);
   }
   return 0;
 }
 
 int pa_delay(long *the_delay) {
+  check_pa_stream_status(stream, "audio_pa delay.");
+  // debug(1,"pa_delay");
   long result = 0;
-  int reply = -ENODEV;
+  int reply = 0;
   pa_usec_t latency;
   int negative;
   pa_threaded_mainloop_lock(mainloop);
@@ -276,8 +314,8 @@ int pa_delay(long *the_delay) {
   return reply;
 }
 
-void flush(void) {
-  // Cork the stream so it will stop playing
+static void flush(void) {
+  check_pa_stream_status(stream, "audio_pa flush.");
   pa_threaded_mainloop_lock(mainloop);
   if (pa_stream_is_corked(stream) == 0) {
     // debug(1,"Flush and cork for flush.");
@@ -285,12 +323,15 @@ void flush(void) {
     pa_stream_cork(stream, 1, stream_success_cb, mainloop);
   }
   pa_threaded_mainloop_unlock(mainloop);
+  pthread_mutex_lock(&buffer_mutex);
   audio_toq = audio_eoq = audio_lmb;
   audio_umb = audio_lmb + audio_size;
   audio_occupancy = 0;
+  pthread_mutex_unlock(&buffer_mutex);
 }
 
 static void stop(void) {
+  check_pa_stream_status(stream, "audio_pa stop.");
   // Cork the stream so it will stop playing
   pa_threaded_mainloop_lock(mainloop);
   if (pa_stream_is_corked(stream) == 0) {
@@ -299,12 +340,11 @@ static void stop(void) {
     pa_stream_cork(stream, 1, stream_success_cb, mainloop);
   }
   pa_threaded_mainloop_unlock(mainloop);
+  pthread_mutex_lock(&buffer_mutex);
   audio_toq = audio_eoq = audio_lmb;
   audio_umb = audio_lmb + audio_size;
   audio_occupancy = 0;
-
-  // debug(1,"pa stop");
-  pa_stream_disconnect(stream);
+  pthread_mutex_unlock(&buffer_mutex);
 }
 
 audio_output audio_pa = {.name = "pa",
@@ -324,54 +364,31 @@ audio_output audio_pa = {.name = "pa",
                          .mute = NULL};
 
 void context_state_cb(__attribute__((unused)) pa_context *context, void *mainloop) {
+  // debug(1,"context_state_cb called.");
   pa_threaded_mainloop_signal(mainloop, 0);
 }
 
 void stream_state_cb(__attribute__((unused)) pa_stream *s, void *mainloop) {
+  // debug(1,"stream_state_cb called.");
   pa_threaded_mainloop_signal(mainloop, 0);
 }
 
 void stream_write_cb(pa_stream *stream, size_t requested_bytes,
                      __attribute__((unused)) void *userdata) {
-
-  /*
-    // play with timing information
-    const struct pa_timing_info *ti = pa_stream_get_timing_info(stream);
-    if ((ti == NULL) || (ti->write_index_corrupt)) {
-      debug(2, "Timing info invalid");
-    } else {
-      struct timeval time_now;
-
-      pa_gettimeofday(&time_now);
-
-      uint64_t time_now_fp = ((uint64_t)time_now.tv_sec << 32) +
-                             ((uint64_t)time_now.tv_usec << 32) / 1000000; // types okay
-      uint64_t time_of_ti_fp = ((uint64_t)(ti->timestamp.tv_sec) << 32) +
-                               ((uint64_t)(ti->timestamp.tv_usec) << 32) / 1000000; // types okay
-
-      if (time_now_fp >= time_of_ti_fp) {
-        uint64_t estimate_age = ((time_now_fp - time_of_ti_fp) * 1000000) >> 32;
-        uint64_t bytes_in_buffer = ti->write_index - ti->read_index;
-        pa_usec_t microseconds_to_write_buffer = (bytes_in_buffer * 1000000) / (44100 * 2 * 2);
-        pa_usec_t ea = (pa_usec_t)estimate_age;
-        pa_usec_t pa_latency = ti->sink_usec + ti->transport_usec + microseconds_to_write_buffer;
-        pa_usec_t estimated_latency = pa_latency - estimate_age;
-        // debug(1,"Estimated latency is %d microseconds.",estimated_latency);
-
-  //    } else {
-  //      debug(1, "Time now is earlier than time of timing information");
-      }
-    }
-  */
+  check_pa_stream_status(stream, "audio_pa stream_write_cb.");
   int bytes_to_transfer = requested_bytes;
-  int bytes_transferred = 0;
+  // int bytes_transferred = 0;
   uint8_t *buffer = NULL;
-
-  while ((bytes_to_transfer > 0) && (audio_occupancy > 0)) {
+  int ret = 0;
+  pthread_mutex_lock(&buffer_mutex);
+  pthread_cleanup_push(mutex_unlock, (void *)&buffer_mutex);
+  while ((bytes_to_transfer > 0) && (audio_occupancy > 0) && (ret == 0)) {
+    if (pa_stream_is_suspended(stream))
+      debug(1, "stream is suspended");
     size_t bytes_we_can_transfer = bytes_to_transfer;
     if (audio_occupancy < bytes_we_can_transfer) {
       // debug(1, "Underflow? We have %d bytes but we are asked for %d bytes", audio_occupancy,
-      //      bytes_we_can_transfer);
+      //       bytes_we_can_transfer);
       pa_stream_cork(stream, 1, stream_success_cb, mainloop);
       // debug(1, "Corked");
       bytes_we_can_transfer = audio_occupancy;
@@ -379,68 +396,33 @@ void stream_write_cb(pa_stream *stream, size_t requested_bytes,
 
     // bytes we can transfer will never be greater than the bytes available
 
-    pa_stream_begin_write(stream, (void **)&buffer, &bytes_we_can_transfer);
-    if (bytes_we_can_transfer <= (size_t)(audio_umb - audio_toq)) {
-      // the bytes are all in a row in the audo buffer
-      memcpy(buffer, audio_toq, bytes_we_can_transfer);
-      audio_toq += bytes_we_can_transfer;
-      // lock
-      pthread_mutex_lock(&buffer_mutex);
+    ret = pa_stream_begin_write(stream, (void **)&buffer, &bytes_we_can_transfer);
+    if ((ret == 0) && (buffer != NULL)) {
+      if (bytes_we_can_transfer <= (size_t)(audio_umb - audio_toq)) {
+        // the bytes are all in a row in the audio buffer
+        memcpy(buffer, audio_toq, bytes_we_can_transfer);
+        audio_toq += bytes_we_can_transfer;
+        ret = pa_stream_write(stream, buffer, bytes_we_can_transfer, NULL, 0LL, PA_SEEK_RELATIVE);
+      } else {
+        // the bytes are in two places in the audio buffer
+        size_t first_portion_to_write = audio_umb - audio_toq;
+        if (first_portion_to_write != 0)
+          memcpy(buffer, audio_toq, first_portion_to_write);
+        uint8_t *new_buffer = buffer + first_portion_to_write;
+        memcpy(new_buffer, audio_lmb, bytes_we_can_transfer - first_portion_to_write);
+        ret = pa_stream_write(stream, buffer, bytes_we_can_transfer, NULL, 0LL, PA_SEEK_RELATIVE);
+        audio_toq = audio_lmb + bytes_we_can_transfer - first_portion_to_write;
+      }
+      // bytes_transferred += bytes_we_can_transfer;
       audio_occupancy -= bytes_we_can_transfer;
-      pthread_mutex_unlock(&buffer_mutex);
-      // unlock
-      pa_stream_write(stream, buffer, bytes_we_can_transfer, NULL, 0LL, PA_SEEK_RELATIVE);
-      bytes_transferred += bytes_we_can_transfer;
-    } else {
-      // the bytes are in two places in the audio buffer
-      size_t first_portion_to_write = audio_umb - audio_toq;
-      if (first_portion_to_write != 0)
-        memcpy(buffer, audio_toq, first_portion_to_write);
-      uint8_t *new_buffer = buffer + first_portion_to_write;
-      memcpy(new_buffer, audio_lmb, bytes_we_can_transfer - first_portion_to_write);
-      pa_stream_write(stream, buffer, bytes_we_can_transfer, NULL, 0LL, PA_SEEK_RELATIVE);
-      bytes_transferred += bytes_we_can_transfer;
-      audio_toq = audio_lmb + bytes_we_can_transfer - first_portion_to_write;
-      // lock
-      pthread_mutex_lock(&buffer_mutex);
-      audio_occupancy -= bytes_we_can_transfer;
-      pthread_mutex_unlock(&buffer_mutex);
-      // unlock
+      bytes_to_transfer -= bytes_we_can_transfer;
     }
-    bytes_to_transfer -= bytes_we_can_transfer;
-    // debug(1,"audio_toq is %llx",audio_toq);
   }
-
+  pthread_cleanup_pop(1); // release the mutex
+  if (ret != 0)
+    debug(1, "error writing to pa buffer");
   // debug(1,"<<<Frames requested %d, written to pa: %d, corked status:
   // %d.",requested_bytes/4,bytes_transferred/4,pa_stream_is_corked(stream));
-}
-
-void alt_stream_write_cb(pa_stream *stream, size_t requested_bytes,
-                         __attribute__((unused)) void *userdata) {
-  // debug(1, "***Bytes requested bytes %d.", requested_bytes);
-  size_t bytes_remaining = requested_bytes;
-  while (bytes_remaining > 0) {
-    uint8_t *buffer = NULL;
-    size_t bytes_to_fill = 44100;
-    size_t i;
-
-    if (bytes_to_fill > bytes_remaining)
-      bytes_to_fill = bytes_remaining;
-
-    pa_stream_begin_write(stream, (void **)&buffer, &bytes_to_fill);
-    if (buffer) {
-      for (i = 0; i < bytes_to_fill; i += 2) {
-        buffer[i] = (i % 100) * 40 / 100 + 44;
-        buffer[i + 1] = (i % 100) * 40 / 100 + 44;
-      }
-    } else {
-      die("buffer not allocated in alt_stream_write_cb.");
-    }
-
-    pa_stream_write(stream, buffer, bytes_to_fill, NULL, 0LL, PA_SEEK_RELATIVE);
-
-    bytes_remaining -= bytes_to_fill;
-  }
 }
 
 void stream_success_cb(__attribute__((unused)) pa_stream *stream,

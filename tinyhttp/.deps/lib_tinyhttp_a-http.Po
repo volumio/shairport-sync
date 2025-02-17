@@ -1,0 +1,64 @@
+tinyhttp/lib_tinyhttp_a-http.o: tinyhttp/http.c \
+ /usr/include/stdc-predef.h tinyhttp/http.h /usr/include/ctype.h \
+ /usr/include/features.h /usr/include/arm-linux-gnueabihf/sys/cdefs.h \
+ /usr/include/arm-linux-gnueabihf/bits/wordsize.h \
+ /usr/include/arm-linux-gnueabihf/bits/long-double.h \
+ /usr/include/arm-linux-gnueabihf/gnu/stubs.h \
+ /usr/include/arm-linux-gnueabihf/gnu/stubs-hard.h \
+ /usr/include/arm-linux-gnueabihf/bits/types.h \
+ /usr/include/arm-linux-gnueabihf/bits/typesizes.h /usr/include/endian.h \
+ /usr/include/arm-linux-gnueabihf/bits/endian.h \
+ /usr/include/arm-linux-gnueabihf/bits/byteswap.h \
+ /usr/include/arm-linux-gnueabihf/bits/uintn-identity.h \
+ /usr/include/arm-linux-gnueabihf/bits/types/locale_t.h \
+ /usr/include/arm-linux-gnueabihf/bits/types/__locale_t.h \
+ /usr/include/string.h \
+ /usr/include/arm-linux-gnueabihf/bits/libc-header-start.h \
+ /usr/lib/gcc/arm-linux-gnueabihf/8/include/stddef.h \
+ /usr/include/strings.h tinyhttp/header.h tinyhttp/chunk.h
+
+/usr/include/stdc-predef.h:
+
+tinyhttp/http.h:
+
+/usr/include/ctype.h:
+
+/usr/include/features.h:
+
+/usr/include/arm-linux-gnueabihf/sys/cdefs.h:
+
+/usr/include/arm-linux-gnueabihf/bits/wordsize.h:
+
+/usr/include/arm-linux-gnueabihf/bits/long-double.h:
+
+/usr/include/arm-linux-gnueabihf/gnu/stubs.h:
+
+/usr/include/arm-linux-gnueabihf/gnu/stubs-hard.h:
+
+/usr/include/arm-linux-gnueabihf/bits/types.h:
+
+/usr/include/arm-linux-gnueabihf/bits/typesizes.h:
+
+/usr/include/endian.h:
+
+/usr/include/arm-linux-gnueabihf/bits/endian.h:
+
+/usr/include/arm-linux-gnueabihf/bits/byteswap.h:
+
+/usr/include/arm-linux-gnueabihf/bits/uintn-identity.h:
+
+/usr/include/arm-linux-gnueabihf/bits/types/locale_t.h:
+
+/usr/include/arm-linux-gnueabihf/bits/types/__locale_t.h:
+
+/usr/include/string.h:
+
+/usr/include/arm-linux-gnueabihf/bits/libc-header-start.h:
+
+/usr/lib/gcc/arm-linux-gnueabihf/8/include/stddef.h:
+
+/usr/include/strings.h:
+
+tinyhttp/header.h:
+
+tinyhttp/chunk.h:

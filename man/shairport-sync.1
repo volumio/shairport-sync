@@ -1,0 +1,171 @@
+.TH shairport-sync 1 User Manuals
+.SH NAME
+shairport-sync \- AirPlay and AirPlay 2 Audio Player
+.SH SYNOPSIS
+\fBshairport-sync [-djvw]\fB [-a \fB\fIservice-name\fB | --name=\fB\fIservice-name\fB]\fB [-B \fB\fIcommand\fB | --onstart=\fB\fIcommand\fB]\fB [-c \fB\fIconfigurationfile\fB | --configfile=\fB\fIconfigurationfile\fB]\fB [-d | --daemon]\fB [-E \fB\fIcommand\fB | --onstop=\fB\fIcommand\fB]\fB [-g | --get-cover-art]\fB [-j | --justDaemoniseNoPIDFile]\fB [--logOutputLevel]\fB [--log-to-syslog]\fB [-L \fB\fIlatency\fB | --latency=\fB\fIlatency\fB]\fB [-m \fB\fIbackend\fB | --mdns=\fB\fIbackend\fB]\fB [-M | --metadata-enable]\fB [-o \fB\fIbackend\fB | --output=\fB\fIbackend\fB]\fB [-p \fB\fIport\fB | --port=\fB\fIport\fB]\fB [--password=\fB\fIsecret\fB]\fB [-r \fB\fIthreshold\fB | --resync=\fB\fIthreshold\fB]\fB [--statistics]\fB [-S \fB\fImode\fB | --stuffing=\fB\fImode\fB]\fB [-t \fB\fItimeout\fB | --timeout=\fB\fItimeout\fB]\fB [--tolerance=\fB\fIframes\fB]\fB [-v | --verbose]\fB [-w | --wait-cmd]\fB [-- \fB\fIaudio_backend_options\fB]\fB
+
+shairport-sync -X | --displayConfig\fB
+
+shairport-sync -h\fB
+
+shairport-sync -k\fB
+
+shairport-sync -V\fB
+\f1
+.SH DESCRIPTION
+Shairport Sync plays AirPlay audio. It can be built to stream either from "classic" AirPlay (aka "AirPlay 1") or from AirPlay 2 devices.
+
+AirPlay 2 support is limited, and AirPlay 2 from iTunes for Windows is not supported. For AirPlay 2 operation, a companion program called \fBnqptp\f1 must be installed.
+
+Please see \fBhttps://github.com/mikebrady/shairport-sync\f1 for details.
+
+The name of the Shairport Sync executable is \fBshairport-sync\f1.
+.SH CONFIGURATION FILE SETTINGS
+You should use the configuration file for setting up Shairport Sync because -- apart from a few special-purpose commands -- it has a much richer set of options than are available on the command line. This file is usually \fIshairport-sync.conf\f1 and is generally located in the System Configuration Directory, which is normally the \fI/etc\f1 directory in Linux or the \fI/usr/local/etc\f1 directory in BSD unixes. You may need to have root privileges to modify it.
+
+(Note: Shairport Sync may have been compiled to use a different configuration directory. You can determine which by performing the command \fI$ shairport-sync -V\f1. The last item in the output string is the value of the \fBsysconfdir\f1, i.e. the System Configuration Directory.)
+
+Within the configuration file, settings are organised into groups, for example, there is a \fBgeneral\f1 group of standard settings, and there is an \fBalsa\f1 group with settings that pertain to the \fBALSA\f1 back end. Here is an example of a typical configuration file:
+
+\fBgeneral = {\f1
+
+\fBname = "Mike's Boombox";\f1
+
+\fB};\f1
+
+\fB\f1
+
+\fBalsa = {\f1
+
+\fBoutput_device = "hw:0";\f1
+
+\fBmixer_control_name = "PCM";\f1
+
+\fB};\f1
+
+Users generally only need to set (1) the service name and (2) the output device. If the \fBname\f1 setting is omitted, the service name is derived from the system's hostname. By default, the \fBALSA\f1 backend will be chosen if included in the build. If the (alsa) output device has a mixer that can be used for volume control, then (3) the mixer name should be specified. It is important to do this if the mixer exists. Otherwise, the maximum output from the output device will be whatever setting the mixer happens to have, which will be a matter of chance and which could be very low or even silent.
+
+A sample configuration file with all possible settings, but with all of them commented out, is installed at \fIshairport-sync.conf.sample\f1, within the System Configuration Directory -- \fI/etc\f1 in Linux, \fI/usr/local/etc\f1 in BSD unixes.
+
+The sample configuration file includes extensive documentation of the settings. and is also available at \fBhttps://github.com/mikebrady/shairport-sync/blob/master/scripts/shairport-sync.conf\f1. Please refer to it for the most up-to-date information on configuration file settings.
+.SH OPTIONS
+There are two kinds of command-line options for shairport-sync: regular \fBprogram options\f1 and \fBaudio backend options\f1. Program options are always listed first, followed by any audio backend options, preceded by a \fB--\f1 symbol.
+
+See the EXAMPLES section for sample usages.
+.SH PROGRAM OPTIONS
+Program Options are used by shairport-sync itself.
+.TP
+\fB-a \f1\fIservice name\f1\fB | --name=\f1\fIservice name\f1
+Use this \fIservice name\f1 to identify this player in iTunes, etc.
+
+The following substitutions are allowed: \fB%h\f1 for the computer's hostname, \fB%H\f1 for the computer's hostname with the first letter capitalised (ASCII only), \fB%v\f1 for the shairport-sync version number, e.g. "3.0.1" and \fB%V\f1 for the shairport-sync version string, e.g. "3.0.1-OpenSSL-Avahi-ALSA-soxr-metadata-sysconfdir:/etc".
+
+The default is "%H", which is replaced by the hostname with the first letter capitalised.
+.TP
+\fB-B \f1\fIprogram\f1\fB | --on-start=\f1\fIprogram\f1
+Execute \fIprogram\f1 when playback is about to begin. Specify the full path to the program, e.g. \fI/usr/bin/logger\f1. Executable scripts can be used, but they must have the appropriate shebang (\fI#!/bin/sh\f1) in the headline.
+
+If you want shairport-sync to wait until the command has completed before starting to play, select the \fB-w\f1 option as well. 
+.TP
+\fB-c \f1\fIfilename\f1\fB | --configfile=\f1\fIfilename\f1
+Read configuration settings from \fIfilename\f1. The default is to read them from the \fIshairport-sync.conf\f1 in the System Configuration Directory -- \fI/etc\f1 in Linux, \fI/usr/local/etc\f1 in BSD unixes. For information about configuration settings, see the "Configuration File Settings" section above. 
+.TP
+\fB-d | --daemon\f1
+Instruct shairport-sync to demonise itself. It will write its Process ID (PID) to a file, usually at \fI/var/run/shairport-sync/shairport-sync.pid\f1, which is used by the \fB-k\f1, \fB-D\f1 and \fB-R\f1 options to locate the daemon at a later time. See also the \fB-j\f1 option. Only available if shairport-sync has been compiled with libdaemon support. 
+.TP
+\fB-E \f1\fIprogram\f1\fB | --on-stop=\f1\fIprogram\f1
+Execute \fIprogram\f1 when playback has ended. Specify the full path to the program, e.g. \fI/usr/bin/logger\f1. Executable scripts can be used, but they must have the appropriate shebang (\fI#!/bin/sh\f1) in the headline.
+
+If you want shairport-sync to wait until the command has completed before continuing, select the \fB-w\f1 option as well. 
+.TP
+\fB-g | --get-coverart\f1
+This option requires the \fB-M | --metadata-enable\f1 option to be set, and enables shairport-sync to request cover art from the source and to process it as metadata.
+.TP
+\fB-h | --help\f1
+Print brief help message and exit. 
+.TP
+\fB-j | justDaemoniseNoPIDFile\f1
+Instruct shairport-sync to demonise itself. Unlike the \fB-d\f1 option, it will not write a Process ID (PID) to a file -- it will just (hence the "j") demonise itself. Only available if shairport-sync has been compiled with libdaemon support. 
+.TP
+\fB-k | --kill\f1
+Kill the shairport-sync daemon and exit. (Requires that the daemon has written its PID to an agreed file -- see the \fB-d\f1 option. Only available if shairport-sync has been compiled with libdaemon support.) 
+.TP
+\fB--logOutputLevel\f1
+Use this to log the volume level when the volume is changed. It may be useful if you are trying to determine a suitable value for the maximum volume level. Not available as a configuration file setting. 
+.TP
+\fB--log-to-syslog\f1
+Warnings, error messages and messages are sent, by default, to \fISTDERR\f1. Use this option to route these messages to the \fBsyslog\f1 instead. This is intended for use when Shairport Sync is operating as a daemon. 
+
+See also \fB--displayConfig\f1.
+.TP
+\fB-L | --latency=\f1\fIlatency\f1
+Use this to set the \fIdefault latency\f1, in frames, for audio coming from an unidentified source or from an iTunes Version 9 or earlier source. The standard value for the \fIdefault latency\f1 is 88,200 frames, where there are 44,100 frames to the second. 
+
+Please note that this feature is deprecated and will be removed in a future version of shairport-sync.
+.TP
+\fB-M | --metadata-enable\f1
+Ask the client to send metadata. It will be sent, along with metadata generated by shairport-sync itself, to a pipe and will also be sent as UDP packets. If you add the \fB-g | --get-cover-art\f1 then cover art included, where available. See \fBhttps://github.com/mikebrady/shairport-sync-metadata-reader\f1 for a sample metadata reader. 
+.TP
+\fB--metadata-pipename=\f1\fIpathname\f1
+Specify the path name for the metadata pipe. Note that \fBshairport-sync\f1 will need write permission on that directory and pipe. The default is \fI/tmp/shairport-sync-metadata\f1. If you rename the \fBshairport-sync\f1 executable, the default pipe name will change accordingly. 
+.TP
+\fB-m \f1\fImdnsbackend\f1\fB | --mdns=\f1\fImdnsbackend\f1
+Force the use of the specified mDNS backend to advertise the player on the network. The default is to try all mDNS backends in order until one works. 
+.TP
+\fB-o \f1\fIoutputbackend\f1\fB | --output=\f1\fIoutputbackend\f1
+Force the use of the specified output backend to play the audio. The default is to try the first one. 
+.TP
+\fB-p \f1\fIport\f1\fB | --port=\f1\fIport\f1
+Listen for play requests on \fIport\f1. The default is to use port 5000 for AirPlay and 7000 for AirPlay 2. 
+.TP
+\fB--password=\f1\fIsecret\f1
+Require the password \fIsecret\f1 to be able to connect and stream to the service. (This only works for AirPlay and not for AirPlay 2.) 
+.TP
+\fB-r \f1\fIthreshold\f1\fB | --resync=\f1\fIthreshold\f1
+Resynchronise if timings differ by more than \fIthreshold\f1 frames. If the output timing differs from the source timing by more than the threshold, output will be muted and a full resynchronisation will occur. The default threshold is 2,205 frames, i.e. 50 milliseconds. Specify \fB0\f1 to disable resynchronisation. This setting is deprecated and will be removed in a future version of shairport-sync. 
+.TP
+\fB--statistics\f1
+Print some performance information to \fISTDERR\f1, or to \fBsyslog\f1 if the \fB-log-to-syslog\f1 command line option is also chosen. 
+.TP
+\fB-S \f1\fImode\f1\fB | --stuffing=\f1\fImode\f1
+Interpolate ("stuff") the audio stream using the \fImode\f1. "Stuffing" refers to the process of adding or removing frames of audio to or from the stream sent to the output device in order to keep it synchronised with the player. The \fBbasic\f1 mode is normally almost completely inaudible. The alternative mode, \fBsoxr\f1, is even less obtrusive but requires much more processing power. For this mode, support for \fBlibsoxr\f1, the SoX Resampler Library, must be selected when \fBshairport-sync\f1 is built. The default setting, \fBauto\f1, allows Shairport Sync to choose \fBsoxr\f1 mode if the system is powerful enough. 
+.TP
+\fB-t \f1\fItimeout\f1\fB | --timeout=\f1\fItimeout\f1
+Exit play mode if the stream disappears for more than \fItimeout\f1 seconds.
+
+When shairport-sync plays an audio stream, it starts a play session and will return a busy signal to any other sources that attempt to use it. If the audio stream disappears for longer than \fItimeout\f1 seconds, the play session will be terminated. If you specify a timeout time of \fB0\f1, shairport-sync will never signal that it is busy and will not prevent other sources from "barging in" on an existing play session. The default value is 120 seconds. 
+.TP
+\fB--tolerance=\f1\fIframes\f1
+Allow playback to be up to \fIframes\f1 out of exact synchronization before attempting to correct it. The default is 88 frames, i.e. 2 ms. The smaller the tolerance, the more likely it is that overcorrection will occur. Overcorrection is when more corrections (insertions and deletions) are made than are strictly necessary to keep the stream in sync. Use the \fB--statistics\f1 option to monitor correction levels. Corrections should not greatly exceed net corrections. This setting is deprecated and will be removed in a future version of shairport-sync. 
+.TP
+\fB-V | --version\f1
+Print version information and exit. 
+.TP
+\fB-v | --verbose\f1
+Print debug information to the \fISTDERR\f1, or to \fBsyslog\f1 if the \fB-log-to-syslog\f1 command line option is also chosen. Repeat up to three times (i.e. \fB-vv\f1 or \fB-vvv\f1) for more detail. You should use \fB-vvv\f1 very sparingly -- it is really noisy. 
+.TP
+\fB-w | --wait-cmd\f1
+Wait for commands specified using \fB-B\f1 or \fB-E\f1 to complete before continuing execution. 
+.TP
+\fB-X | --displayConfig\f1
+This logs information relating to the configuration of Shairport Sync. It can be very useful for debugging. The information logged is some host OS information, the Shairport Sync version string (which indicates the build options used when \fBshairport-sync\f1 was built), the contents of the command line that invoked Shairport Sync, the name of the configuration file and the active settings therein.
+
+If this is the only option on the command line, \fBshairport-sync\f1 will terminate after displaying the information.
+.SH AUDIO BACKEND OPTIONS
+Audio Backend Options are command-line options that are passed to the chosen audio backend. They are always preceded by the \fB--\f1 symbol to introduce them and to separate them from any preceding program options. In this way, option letters can be used as program options and reused as audio backend options without ambiguity.
+
+Audio backends are listed with their corresponding Audio Backend Options in the help text provided by the help (\fB-h\f1 or \fB--help\f1) option.
+.SH EXAMPLES
+Here is a slightly contrived example:
+
+shairport-sync \fB-a "Joe's Stereo"\f1 \fB-o alsa\f1 \fB--\f1 \fB-d hw:1,0\f1 \fB-m hw:1\f1 \fB-c PCM\f1
+
+The program will be visible as "Joe's Stereo" ( \fB-a "Joe's Stereo"\f1 ). The program option \fB-o alsa\f1 specifies that the \fBalsa\f1 backend be used, thus that audio should be output into the \fBALSA\f1 audio subsystem. The audio backend options following the \fB--\f1 separator are passed to the \fBalsa\f1 backend and specify that the audio will be output on subdevice 0 of soundcard 1 ( \fB-d hw:1,0\f1 ) and will take advantage of the same sound card's mixer ( \fB-m hw:1\f1 ) using the level control named "PCM" ( \fB-c "PCM"\f1 ). 
+
+The example above is slightly contrived: Firstly, if the \fBalsa\f1 backend has been included in the build, it will be the default, so it doesn't need to be specified and the \fB-o alsa\f1 option could be omitted. Secondly, subdevice 0 is the default for a soundcard, so the output device could simply be written \fB-d hw:1\f1. Thirdly, when a mixer name is given ( \fB-c "PCM"\f1 ), the default is that the mixer is on the output device, so the \fB-m hw:1\f1 is unnecessary here. Using these defaults and simplifications gives the following command:
+
+shairport-sync \fB-a "Joe's Stereo"\f1 \fB--\f1 \fB-d hw:1\f1 \fB-c PCM\f1
+.SH CREDITS
+Mike Brady (\fBhttps://github.com/mikebrady\f1) developed Shairport Sync from Shairport by James Wah (\fBhttps://github.com/abrasive\f1).
+.SH COMMENTS
+This man page was written using \fBxml2man(1)\f1 by Oliver Kurth.

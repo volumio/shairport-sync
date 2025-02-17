@@ -3,7 +3,8 @@
 
 #include "player.h"
 
-extern rtsp_conn_info *playing_conn;
+extern pthread_rwlock_t principal_conn_lock;
+extern rtsp_conn_info *principal_conn;
 extern rtsp_conn_info **conns;
 
 void *rtsp_listen_loop(__attribute((unused)) void *arg);
